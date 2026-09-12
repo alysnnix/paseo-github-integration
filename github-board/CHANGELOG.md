@@ -22,6 +22,28 @@ pin and a line to read before you move.
   leaves the board with the merge, since the columns are a `state:open` search, and the open
   panel stays behind reading **Merged**.
 
+- **The board now sweeps every pull request and issue you are attached to, not only the ones
+  you wrote.** It searches review requests, mentions, assignments and authorship, and unions
+  the results, so a pull request waiting on your review is on the board even though someone
+  else opened it. Each card carries every relationship it matched, and a row of chips filters
+  by one: **Needs my review**, **Mentions me**, **Assigned to me**, **Mine**, and **Other**,
+  each with the count it would leave. The chips are scoped to what the list can mean, so
+  **Needs my review** is offered on pull requests and nowhere else, and a choice the current
+  list cannot honour falls back to **All** without being forgotten.
+- **Watched owners.** Settings takes a list of users and organisations, and the board sweeps
+  each one whole rather than waiting for something to name you. That is how a team's open work
+  shows up on a board of your own.
+- **One list at a time, with a switcher.** **Pull requests**, **Issues**, **Discussions** and
+  **Projects** replace the four side-by-side columns, which never fit a narrow window. Drafts
+  and open pull requests are one chronological list.
+- **Projects.** The new tab lists the Projects v2 boards the login and the watched owners own,
+  and opens one grouped by its Status column. Projects need a scope `gh auth login` does not
+  grant, so a token without it gets the command to run and a button to copy it rather than an
+  error.
+- **Owner and repository filters, and a search box.** Both pickers filter their own list, so a
+  long list of repositories is typed at rather than scrolled, and the search box matches a
+  title, a repository, or a number.
+
 ## [0.5.0] — 2026-09-08
 
 ### Added
