@@ -1266,14 +1266,92 @@ export function useStyles({ theme, layout }: PluginSurfaceProps) {
 type Styles = ReturnType<typeof useStyles>;
 
 /**
- * Whether a repository matches a search query, against the full `owner/name`
- * or the name alone — a search for "board" should find `getpaseo/github-board`
- * without the owner typed first, the way GitHub's own repository picker does.
+ * Separators are noise in a search box: `octo-org/checkout-frontend` is the
+ * same repository whether it is typed with the slash, with the hyphens, or as
+ * two plain words. Every side of a comparison goes through this, so "checkout
+ * frontend" and "octo org" both land on the same normalised haystack.
+ */
+function normalizeSearchText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Which part of a card one typed word is about. */
+type SearchField = "any" | "repository" | "number" | "author";
+
+interface SearchTerm {
+  field: SearchField;
+  /** Already normalised, and never empty: a lone sigil is dropped while it is being typed. */
+  value: string;
+}
+
+/**
+ * The sigils the box understands, each claiming one field. A bare word still
+ * searches title, repository and number together, which is what someone who
+ * has never seen this types.
+ */
+const SEARCH_FIELD_BY_SIGIL: Record<string, SearchField> = {
+  "/": "repository",
+  "#": "number",
+  "@": "author",
+};
+
+/**
+ * Splits the box into terms that all have to match. Words are separated by
+ * spaces, so `/frontend @dependabot` is "a frontend repository, opened by
+ * dependabot"; a word carrying no sigil keeps the old broad behaviour. A term
+ * is *not* re-split on the separators `normalizeSearchText` flattens, so
+ * `/checkout-frontend` stays one phrase rather than two independent words.
+ */
+function parseSearchQuery(query: string): SearchTerm[] {
+  const terms: SearchTerm[] = [];
+  for (const word of query.split(/\s+/)) {
+    if (word === "") continue;
+    const field = SEARCH_FIELD_BY_SIGIL[word[0] ?? ""] ?? "any";
+    const rest = field === "any" ? word : word.slice(1);
+    const value = field === "number" ? rest.replace(/\D+/g, "") : normalizeSearchText(rest);
+    if (value === "") continue;
+    terms.push({ field, value });
+  }
+  return terms;
+}
+
+/**
+ * Whether one card satisfies every term. Terms are AND-ed, because narrowing
+ * is what a second word is for; within a `"any"` term the three fields are
+ * OR-ed, since the user has not said which one they meant.
+ */
+function matchesSearchTerms(item: BoardItem, terms: readonly SearchTerm[]): boolean {
+  if (terms.length === 0) return true;
+  const title = normalizeSearchText(item.title);
+  const repository = normalizeSearchText(item.repository);
+  const author = item.author === null ? "" : normalizeSearchText(item.author);
+  const number = String(item.number);
+  for (const term of terms) {
+    const matched =
+      term.field === "repository"
+        ? repository.includes(term.value)
+        : term.field === "author"
+          ? author.includes(term.value)
+          : term.field === "number"
+            ? number.includes(term.value)
+            : title.includes(term.value) ||
+              repository.includes(term.value) ||
+              number.includes(term.value);
+    if (!matched) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a repository matches a picker query. Both sides lose their
+ * separators, so `octo-org/checkout-frontend` answers to "octo org",
+ * to "checkout frontend" and to "frontend" alike — the owner does not have to
+ * be typed first, and a hyphen the user did not type is not a miss.
  */
 function repositoryMatchesQuery(repository: string, query: string): boolean {
-  if (repository.toLowerCase().includes(query)) return true;
-  const slash = repository.indexOf("/");
-  return slash >= 0 && repository.slice(slash + 1).toLowerCase().includes(query);
+  const haystack = normalizeSearchText(repository);
+  const words = normalizeSearchText(query).split(" ");
+  return words.every((word) => word === "" || haystack.includes(word));
 }
 
 /**
@@ -1412,11 +1490,11 @@ function OwnerFilter({
   useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedQuery = normalizeSearchText(query);
   const visibleOwners =
     normalizedQuery === ""
       ? owners
-      : owners.filter((owner) => owner.toLowerCase().includes(normalizedQuery));
+      : owners.filter((owner) => normalizeSearchText(owner).includes(normalizedQuery));
 
   return (
     <View style={styles.filterAnchor}>
@@ -4284,17 +4362,12 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     return relationFiltered.filter((row) => !hiddenOwners.has(row.item.owner));
   }, [relationFiltered, hiddenOwners]);
 
-  /** Relation, then owner, then repository (already applied in `filteredColumns`), then this free-text search. */
+  /** Relation, then owner, then repository (already applied in `filteredColumns`), then this search. */
+  const searchTerms = useMemo(() => parseSearchQuery(searchQuery), [searchQuery]);
   const displayRows = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (query === "") return ownerFiltered;
-    return ownerFiltered.filter(
-      (row) =>
-        row.item.title.toLowerCase().includes(query) ||
-        row.item.repository.toLowerCase().includes(query) ||
-        String(row.item.number).includes(query),
-    );
-  }, [ownerFiltered, searchQuery]);
+    if (searchTerms.length === 0) return ownerFiltered;
+    return ownerFiltered.filter((row) => matchesSearchTerms(row.item, searchTerms));
+  }, [ownerFiltered, searchTerms]);
 
   const selectColumnMode = useCallback((id: BoardMode) => setMode(id), []);
 
@@ -4695,9 +4768,9 @@ export function GitHubBoard(props: PluginSurfaceProps) {
             />
           ) : null}
           <TextInput
-            accessibilityLabel="Search title, repository, or number"
+            accessibilityLabel="Search: a plain word matches title, repository or number; /name a repository, #123 a number, @login an author"
             style={styles.searchInput}
-            placeholder="Search title, repo, or #number"
+            placeholder="Search, or /repo #123 @author"
             placeholderTextColor={styles.subtle.color}
             value={searchQuery}
             onChangeText={setSearchQuery}

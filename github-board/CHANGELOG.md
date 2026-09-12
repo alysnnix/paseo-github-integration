@@ -40,9 +40,14 @@ pin and a line to read before you move.
   and opens one grouped by its Status column. Projects need a scope `gh auth login` does not
   grant, so a token without it gets the command to run and a button to copy it rather than an
   error.
-- **Owner and repository filters, and a search box.** Both pickers filter their own list, so a
-  long list of repositories is typed at rather than scrolled, and the search box matches a
-  title, a repository, or a number.
+- **Owner and repository filters, and a search box that reads sigils.** Both pickers filter
+  their own list, so a long list of repositories is typed at rather than scrolled. In the
+  search box a plain word still matches a title, a repository or a number, and three sigils
+  narrow it: `/name` searches repositories, `#123` searches numbers, and `@login` searches
+  authors. Words are combined, so `@dependabot /trunk` is "opened by dependabot, in a trunk
+  repository". Separators are ignored on both sides, which is what was breaking before:
+  `checkout frontend` and `octo-org/` both find `octo-org/checkout-frontend`, where a
+  literal match found nothing unless the hyphens were typed exactly.
 
 ## [0.5.0] — 2026-09-08
 
