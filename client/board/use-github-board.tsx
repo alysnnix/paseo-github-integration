@@ -14,7 +14,7 @@ import { useBoardSettings } from "./use-board-settings";
  * the mutations a label edit or a merge applies to the board in place plus
  * the overlays — detail panel, label menu, send dialog, settings screen —
  * the surface can show one of at a time (`useBoardOverlays`). Kept as one
- * hook, not one component, so the JSX in `GitHubBoard.tsx` reads exactly as
+ * hook, not one component, so the JSX in `github-board.tsx` reads exactly as
  * it did before the split: every name it references is simply destructured
  * off this hook's return instead of declared inline.
  */

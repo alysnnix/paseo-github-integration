@@ -85,9 +85,9 @@ Releases are verifiable: every release tag is signed, the published tarball ship
 `SHA256SUMS`, and the artifact carries GitHub build provenance.
 
 ```bash
-git verify-tag v0.5.0
+git verify-tag v1.0.0
 sha256sum -c SHA256SUMS
-gh attestation verify paseo-github-integration-0.5.0.tar.gz --repo alysnnix/paseo-github-integration
+gh attestation verify paseo-github-integration-1.0.0.tar.gz --repo alysnnix/paseo-github-integration
 ```
 
 ## Development
@@ -103,8 +103,7 @@ paseo plugin install "$PWD" --id github-integration-dev
 paseo plugin reload github-integration-dev   # after every source change
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the module layout and the rules the linter enforces, and
-[`docs/specs/`](docs/specs) for the architecture decisions behind them.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the module layout and the rules the linter enforces.
 
 ## Credits
 

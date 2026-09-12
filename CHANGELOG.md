@@ -9,6 +9,12 @@ pin and a line to read before you move.
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-09-12
+
+First release of this repository, and the first under the id `github-integration`. The versions
+below it were released as `github-board`, one folder of the fork this started from; their entries
+are kept because the code they describe is still here.
+
 ### Changed
 
 - **The plugin is now its own repository, and its id is `github-integration`.** It used to be one
@@ -37,8 +43,8 @@ pin and a line to read before you move.
 - Tests (vitest) over the logic that is pure: search parsing, the orderings, prompt templates, the
   relation merge, and the cache. CI runs typecheck, lint, tests and the Nix build.
 - The project's own rules are enforced by zero-dependency scripts rather than a linter plugin tree:
-  400 code lines per file, no duplicated function bodies, the SDK import boundaries, and version
-  agreement across `package.json`, `nix/plugin.nix` and this file.
+  lowercase kebab-case filenames, 400 code lines per file, no duplicated function bodies, the SDK
+  import boundaries, and version agreement across `package.json`, `nix/plugin.nix` and this file.
 - Releases are cut from a signed tag, with notes taken verbatim from this file, a `SHA256SUMS`
   beside the tarball, and GitHub build provenance to verify with `gh attestation verify`.
 

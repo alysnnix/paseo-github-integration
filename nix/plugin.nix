@@ -12,7 +12,7 @@
 # anything the daemon resolves.
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "paseo-github-integration";
-  version = "0.5.0";
+  version = "1.0.0";
 
   # A file set rather than the directory: the repository root is also the plugin
   # root now, so `node_modules`, the lockfile, the docs screenshots, the flake

@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // Rule: no source file over 400 lines.
 //
-// This codebase documents heavily and deliberately (see CLAUDE.md and
-// docs/specs/2026-09-12-architecture-design.md): a file earns its length
-// from JSDoc-style explanation of *why*, not from doing more. Counting every
-// raw line would punish that documentation, so the limit is measured in code
-// lines only (see scripts/lib/scan.mjs `classify`): a line that is entirely
-// comment or blank is free, and only a line containing at least one
-// character of real code, a string, or a regex literal counts against the
-// limit.
+// This codebase documents heavily and deliberately (see CLAUDE.md): a file
+// earns its length from JSDoc-style explanation of *why*, not from doing
+// more. Counting every raw line would punish that documentation, so the
+// limit is measured in code lines only (see scripts/lib/scan.mjs
+// `classify`): a line that is entirely comment or blank is free, and only a
+// line containing at least one character of real code, a string, or a regex
+// literal counts against the limit.
 const MAX_CODE_LINES = 400;
 
 import { readFileSync } from "node:fs";

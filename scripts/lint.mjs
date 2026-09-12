@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 const ROOT = process.cwd();
 
 const steps = [
+  { name: "file-names", command: ["node", "scripts/check-file-names.mjs"] },
   { name: "max-lines", command: ["node", "scripts/check-max-lines.mjs"] },
   { name: "duplicate-functions", command: ["node", "scripts/check-duplicate-functions.mjs"] },
   { name: "import-boundaries", command: ["node", "scripts/check-import-boundaries.mjs"] },

@@ -58,10 +58,14 @@ register contributions. No other code module may sit at the root.
 
 ## The rules the linter enforces
 
-`npm run lint` runs four zero-dependency Node scripts in `scripts/`, then `oxlint`. They are
-deliberately not an ESLint plugin tree: four project rules do not justify hundreds of transitive
+`npm run lint` runs five zero-dependency Node scripts in `scripts/`, then `oxlint`. They are
+deliberately not an ESLint plugin tree: five project rules do not justify hundreds of transitive
 packages in a repository whose whole point is that you trust its code.
 
+- **Lowercase kebab-case filenames.** `github-board.tsx`, never `GitHubBoard.tsx`. macOS and
+  Windows filesystems are case-insensitive by default, so a case-only rename is invisible to git
+  there and a stale import keeps resolving on one machine while failing on another. Compound
+  suffixes such as `.styles.ts` and `.test.ts` are fine.
 - **400 code lines per file.** Comment lines are free, on purpose: this codebase documents *why* at
   length and must not be pushed to stop.
 - **No duplicated function bodies.** Two functions with identical normalised bodies are one

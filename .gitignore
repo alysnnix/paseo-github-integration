@@ -4,3 +4,6 @@ node_modules/
 # nix
 result
 result-*
+
+# specs are working notes for whoever is building, not part of the plugin
+docs/specs/

@@ -1,6 +1,6 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 
-import { GitHubBoard } from "./client/board/GitHubBoard";
+import { GitHubBoard } from "./client/board/github-board";
 import { BoardSettingsScreen } from "./client/settings/settings-screen";
 import { BoardTimelineCard } from "./client/timeline";
 import { BoardTimelineItemSchema } from "./shared/board";

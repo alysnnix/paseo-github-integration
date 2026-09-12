@@ -8,10 +8,9 @@ open under the organisations and users it watches.
 `README.md` covers what a user sees and how to install it. `CONTRIBUTING.md` covers the dev loop,
 the module layout, the lint rules and the release process. This file covers what neither says:
 where to find the code behind a given behaviour, why the code is shaped the way it is, and the
-constraints nothing catches at compile time. Read `docs/specs/2026-09-12-architecture-design.md`
-for how the plugin got here — the single-file `server/board.ts` and `client/board.tsx`, the four
-side-by-side columns, the dual `author:`/`user:` search and the five hand-rolled caches that
-follow are all gone, and this file no longer describes them.
+constraints nothing catches at compile time. The plugin used to be a single `server/board.ts` and
+`client/board.tsx`, with four side-by-side columns, a dual `author:`/`user:` search and five
+hand-rolled caches; all of that is gone, and this file describes only what is here now.
 
 ## Orientation
 
@@ -477,7 +476,7 @@ this section used to describe is gone: every client that can run this bundle at 
 ## The compact layout and the keyboard
 
 There is no longer a "different layout, not the same one narrowed" story to tell about columns,
-because the columns are gone: `client/board/GitHubBoard.tsx` renders one mode switcher and one
+because the columns are gone: `client/board/github-board.tsx` renders one mode switcher and one
 `FlatList` on both compact and wide, differing only in a handful of specific places. Compact hides
 the Refresh button and the "GitHub" title (the surface chrome already names the plugin) and pulls to
 refresh with a `RefreshControl` instead; wide keeps both, plus the "Updated …" timestamp that
