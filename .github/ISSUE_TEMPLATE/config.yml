@@ -2,4 +2,4 @@ blank_issues_enabled: true
 contact_links:
   - name: Paseo itself
     url: https://paseo.sh
-    about: Questions about the Paseo app or daemon, rather than these plugins.
+    about: Questions about the Paseo app or daemon, rather than this plugin.

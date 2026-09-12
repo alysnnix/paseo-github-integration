@@ -1,15 +1,20 @@
 name: Bug report
-description: Something in one of these plugins doesn't work.
+description: Something in this plugin doesn't work.
 labels: [bug]
 body:
   - type: dropdown
-    id: plugin
+    id: area
     attributes:
-      label: Which plugin?
+      label: Which part?
+      description: >
+        Roughly where you saw it. If a GitHub query came back wrong the answer is usually the
+        board; if it looked wrong, the detail panel.
       options:
-        - skills
-        - github-board
-        - launchd-jobs
+        - The board list, its filters or its search
+        - The detail panel, review or merge
+        - Projects
+        - Send to chat
+        - Settings
         - Not sure
     validations:
       required: true
@@ -47,6 +52,7 @@ body:
         - iOS
         - Android
         - Web
+        - Linux desktop
     validations:
       required: true
 
@@ -54,5 +60,5 @@ body:
     id: logs
     attributes:
       label: Plugin logs
-      description: Output of `paseo plugin logs <id>`. Redact anything private first.
+      description: Output of `paseo plugin logs github-integration`. Redact anything private first.
       render: text

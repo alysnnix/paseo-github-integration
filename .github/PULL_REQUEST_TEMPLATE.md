@@ -1,19 +1,13 @@
 ## What this changes
 
-<!-- One or two sentences. Which plugin, and what's different for the person using it. -->
-
-## Plugin(s) touched
-
-- [ ] `skills`
-- [ ] `github-board`
-- [ ] `launchd-jobs`
-- [ ] Repo-level (docs, CI, config)
+<!-- One or two sentences. What's different for the person using it. -->
 
 ## Checks
 
-- [ ] `npm run typecheck` passes in every plugin I touched
-- [ ] `npm test` passes in `skills` / `launchd-jobs` if touched
-- [ ] `paseo plugin reload <id>` loads cleanly against a real daemon
+- [ ] `npm run typecheck` passes
+- [ ] `npm run lint` passes, including the project rules in `scripts/`
+- [ ] `npm test` passes
+- [ ] `paseo plugin reload github-integration` loads cleanly against a real daemon
 
 ## UI
 

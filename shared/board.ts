@@ -191,6 +191,26 @@ export type BoardItem = z.output<typeof BoardItemSchema>;
 export type BoardColumn = z.output<typeof BoardColumnSchema>;
 export type Board = z.output<typeof BoardSchema>;
 
+/**
+ * The exact shape GitHub itself enforces for an organisation or user login:
+ * 1-39 characters, letters, digits or a hyphen, never leading, trailing or
+ * doubled. Anchoring the format here — rather than accepting any string — is
+ * what keeps a watched owner from smuggling another search qualifier (a
+ * space, a colon) into the `user:<owner>` term `ownedBuckets` builds from it.
+ */
+const GITHUB_LOGIN_PATTERN = /^[a-zA-Z\d](?:[a-zA-Z\d]|-(?=[a-zA-Z\d]))*$/;
+
+const GitHubLoginSchema = z.string().max(39).regex(GITHUB_LOGIN_PATTERN, "not a valid GitHub login");
+
+/**
+ * Bounded the same way `limit` is bounded right beside it: each entry becomes
+ * its own aliased search in one GraphQL query (`ownedBuckets` on the board,
+ * the `bN: organization(...)` aliases in `server/projects/list.ts`), so an
+ * unbounded array here is an unbounded query, not just an unbounded loop.
+ */
+const WATCHED_OWNERS_MAX = 50;
+const WatchedOwnersSchema = z.array(GitHubLoginSchema).max(WATCHED_OWNERS_MAX).default([]);
+
 export const loadBoard = defineRpc({
   name: "board.load",
   input: z.object({
@@ -202,7 +222,7 @@ export const loadBoard = defineRpc({
      * a plugin server registers settings but never reads them: the document
      * belongs to the app, so the caller is the only side that has it.
      */
-    owners: z.array(z.string()).default([]),
+    owners: WatchedOwnersSchema,
     limit: z.number().int().min(1).max(100).default(30),
     /** Set by the Refresh button to bypass the server's short-lived board cache. */
     force: z.boolean().default(false),
@@ -248,7 +268,7 @@ export const listProjects = defineRpc({
   input: z.object({
     login: z.string().optional(),
     /** Same reason as `loadBoard.owners`: the server cannot read settings. */
-    owners: z.array(z.string()).default([]),
+    owners: WatchedOwnersSchema,
     force: z.boolean().default(false),
   }),
   output: z.object({

@@ -37,6 +37,22 @@ const BLOCK_TAGS = new Set([
   "dt", "dd", "picture", "video",
 ]);
 
+/**
+ * How many levels of nested quoting `convertSegment` (below) and
+ * `parseBlocks` (in `markdown.tsx`) will carry before they stop and treat
+ * the remainder as plain text. GitHub itself never visibly nests past a
+ * handful of levels, and a hostile body is free to go much further: a
+ * single Markdown line of thousands of `>` characters, or thousands of
+ * nested `<blockquote>` or `<details>` tags, all comfortably inside a 65 KB
+ * GitHub body. Capping the depth keeps `parseBlocks`'s per-level recursion
+ * from overflowing the JavaScript stack — there is no error boundary
+ * anywhere in `client/`, so that throw would take down the whole board
+ * rather than one comment — and keeps this file's own quote-prefix
+ * rewriting, repeated once per nesting level on every line inside the
+ * quote, from growing with the nesting depth instead of staying flat.
+ */
+export const MAX_NESTING_DEPTH = 20;
+
 const NAMED_ENTITIES: Record<string, string> = {
   amp: "&",
   lt: "<",
@@ -88,11 +104,14 @@ function attribute(attributes: string, name: string): string | null {
 }
 
 /**
- * A tag, or an inline code span. Matching the span as a token is what keeps
- * `` `<code>` `` from being read as a tag. A tag name must be followed by
- * whitespace, `/` or `>`, so `<https://…>` autolinks are not tags either.
+ * A tag. A tag name must be followed by whitespace, `/` or `>`, so
+ * `<https://…>` autolinks are not tags either. Sticky (`y`), so testing a
+ * position where no tag opens fails right there instead of the engine
+ * scanning ahead for wherever the pattern next matches — that unbounded
+ * scan is what would turn a body full of stray `<` characters into an O(n²)
+ * probe.
  */
-const TOKEN = /(`+)[^`\n]*?\1|<(\/?)([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*?)?\s*\/?>/g;
+const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)(\s[^>]*?)?\s*\/?>/y;
 
 /** The output ends at the start of a line, past any quote prefix. */
 const LINE_START = /\n(?:> )*$/;
@@ -109,6 +128,74 @@ interface TableFrame {
   rows: number;
   cells: number;
   inRow: boolean;
+}
+
+/**
+ * Where the code span opened by a backtick run at `start` closes: the
+ * position just past the next run of backticks whose length exactly
+ * matches the opener's, found with one forward scan. The single regex this
+ * replaces, `` /(`+)[^`\n]*?\1/ ``, matched the same thing with a
+ * backreference after a greedy quantifier — quadratic on a long
+ * unterminated run, because the engine retries every possible length of
+ * the opening run at every position before giving up. Counting run lengths
+ * by hand instead visits each character a bounded number of times.
+ */
+function codeSpanEnd(html: string, start: number): number | null {
+  let i = start;
+  while (i < html.length && html[i] === "`") i += 1;
+  const openLength = i - start;
+  while (i < html.length) {
+    if (html[i] !== "`") {
+      i += 1;
+      continue;
+    }
+    const runStart = i;
+    while (i < html.length && html[i] === "`") i += 1;
+    if (i - runStart === openLength) return i;
+  }
+  return null;
+}
+
+/**
+ * The next token at or after `from`: a code span (reported so the caller
+ * can skip over it without reading a tag spelled out inside it as a real
+ * one) or a recognised HTML tag. `null` once nothing more matches before
+ * the end of the string.
+ */
+function nextToken(
+  html: string,
+  from: number,
+): { index: number; length: number; isCode: boolean; closing: boolean; name: string; attrs: string } | null {
+  let i = from;
+  while (i < html.length) {
+    if (html[i] === "`") {
+      const end = codeSpanEnd(html, i);
+      if (end !== null) {
+        return { index: i, length: end - i, isCode: true, closing: false, name: "", attrs: "" };
+      }
+      // No closing run anywhere ahead: this run is not a code span.
+      // Skipping past all of it keeps its interior positions from each
+      // being retried as their own opener.
+      while (i < html.length && html[i] === "`") i += 1;
+      continue;
+    }
+    if (html[i] === "<") {
+      TAG.lastIndex = i;
+      const match = TAG.exec(html);
+      if (match !== null) {
+        return {
+          index: i,
+          length: match[0].length,
+          isCode: false,
+          closing: match[1] === "/",
+          name: match[2] ?? "",
+          attrs: match[3] ?? "",
+        };
+      }
+    }
+    i += 1;
+  }
+  return null;
 }
 
 /**
@@ -232,7 +319,7 @@ function convertSegment(html: string): string {
           quoteDepth = Math.max(0, quoteDepth - 1);
         } else {
           newline();
-          quoteDepth += 1;
+          quoteDepth = Math.min(MAX_NESTING_DEPTH, quoteDepth + 1);
           out += "> ".repeat(quoteDepth);
         }
         return;
@@ -329,16 +416,17 @@ function convertSegment(html: string): string {
   }
 
   let last = 0;
-  TOKEN.lastIndex = 0;
+  let searchFrom = 0;
   for (;;) {
-    const match = TOKEN.exec(html);
-    if (match === null) break;
-    const name = (match[3] ?? "").toLowerCase();
+    const token = nextToken(html, searchFrom);
+    if (token === null) break;
+    searchFrom = token.index + token.length;
+    const name = token.name.toLowerCase();
     // A code span, or a tag GitHub would strip anyway, is text.
-    if (match[1] !== undefined || !KNOWN_TAGS.has(name)) continue;
-    emitText(html.slice(last, match.index));
-    last = match.index + match[0].length;
-    onTag(match[2] === "/", name, match[4] ?? "");
+    if (token.isCode || !KNOWN_TAGS.has(name)) continue;
+    emitText(html.slice(last, token.index));
+    last = token.index + token.length;
+    onTag(token.closing, name, token.attrs);
   }
   emitText(html.slice(last));
   return out;

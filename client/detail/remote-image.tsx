@@ -10,12 +10,17 @@ import { openExternalUrl } from "../web";
 /**
  * One image on its own line of Markdown. A GitHub-hosted one goes through
  * `board.image` — a private repository's attachments answer 404 to the app,
- * which holds no token — and any other host is loaded by `Image` directly,
- * the way a browser would. Either way the size is measured first, so the
- * frame is right before the bitmap paints. A press opens the original.
+ * which holds no token. Any other host is never fetched at all: loading it
+ * directly would make the viewer's own app issue a request straight to
+ * whatever host the comment's author chose, handing that host the reader's
+ * IP address and user agent — a read receipt on an image nobody asked to
+ * load. GitHub's own web UI proxies exactly this case through Camo rather
+ * than ever loading a third-party image directly, and there is no reason to
+ * trust a URL out of someone else's comment body more than GitHub does. This
+ * renders the same fallback link a failed fetch shows instead, alt text and
+ * all, so the reader chooses whether to open it.
  *
- * Failure falls back to the link the panel used to show, named after the
- * alt text, so nothing that was readable before is lost.
+ * A press on a loaded (GitHub-hosted) image opens the original.
  */
 export function RemoteImage({
   url,
@@ -29,32 +34,34 @@ export function RemoteImage({
   accentColor: string;
 }) {
   const fetchImage = useRpc(loadImage);
+  const isGitHubHosted = isGitHubImageHost(url);
   /**
    * An image at a URL never changes underneath it, so once fetched and
    * measured it is cached for good (`staleTime: Infinity`) rather than on the
    * five-minute schedule everything else here uses; the query client's own
    * garbage collection is what eventually drops an entry nothing still holds
    * a reference to, replacing the fixed 24-entry cap this used to enforce by
-   * hand.
+   * hand. The query is disabled outright for a non-GitHub host, so that URL
+   * is never fetched or measured — see the doc comment above.
    */
   const imageQuery = useQuery({
     queryKey: ["image", url],
     queryFn: () => {
-      const source = isGitHubImageHost(url)
-        ? fetchImage({ url }).then((result) => result.dataUrl)
-        : Promise.resolve(url);
-      return source.then(function measure(uri) {
-        // The callback form: the promise form is newer than some react-native-web
-        // builds the app has shipped on, and returns nothing there.
-        return new Promise<{ uri: string; width: number; height: number }>((resolve, reject) => {
-          Image.getSize(
-            uri,
-            (width, height) => resolve({ uri, width, height }),
-            (cause: unknown) => reject(cause instanceof Error ? cause : new Error(String(cause))),
-          );
+      return fetchImage({ url })
+        .then((result) => result.dataUrl)
+        .then(function measure(uri) {
+          // The callback form: the promise form is newer than some react-native-web
+          // builds the app has shipped on, and returns nothing there.
+          return new Promise<{ uri: string; width: number; height: number }>((resolve, reject) => {
+            Image.getSize(
+              uri,
+              (width, height) => resolve({ uri, width, height }),
+              (cause: unknown) => reject(cause instanceof Error ? cause : new Error(String(cause))),
+            );
+          });
         });
-      });
     },
+    enabled: isGitHubHosted,
     staleTime: Infinity,
   });
   const image = imageQuery.data ?? null;
@@ -66,6 +73,16 @@ export function RemoteImage({
         : String(imageQuery.error);
 
   const label = alt.trim() === "" ? "image" : alt;
+
+  if (!isGitHubHosted) {
+    return (
+      <Text style={styles.mdParagraph}>
+        <Text accessibilityRole="link" style={styles.mdLink} onPress={() => openExternalUrl(url)}>
+          [image: {label}]
+        </Text>
+      </Text>
+    );
+  }
 
   if (error !== null) {
     return (

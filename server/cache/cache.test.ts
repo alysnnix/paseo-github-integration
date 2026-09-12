@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -76,6 +76,34 @@ describe("Cache.get", () => {
     const raw = await readFile(join(dataDir, "paseo-github-integration", "cache", "on-disk.json"), "utf8");
     const parsed = JSON.parse(raw) as Record<string, { value: string; storedAt: number }>;
     expect(parsed.k?.value).toBe("v");
+  });
+});
+
+describe("Cache file permissions", () => {
+  it("creates the cache file at 0600 and its directory at 0700", async () => {
+    const cache = new Cache<string>("perm-fresh");
+    await cache.get("k", 10_000, () => Promise.resolve("v"));
+
+    const cacheDir = join(dataDir, "paseo-github-integration", "cache");
+    const fileStat = await stat(join(cacheDir, "perm-fresh.json"));
+    const dirStat = await stat(cacheDir);
+    expect(fileStat.mode & 0o777).toBe(0o600);
+    expect(dirStat.mode & 0o777).toBe(0o700);
+  });
+
+  it("hardens a pre-existing 0644 cache file back to 0600 on first write", async () => {
+    const cacheDir = join(dataDir, "paseo-github-integration", "cache");
+    await mkdir(cacheDir, { recursive: true });
+    const file = join(cacheDir, "perm-stale.json");
+    // Simulates a file an older build already wrote at `writeFile`'s
+    // world-readable default mode, before this instance ever persists.
+    await writeFile(file, "{}", { mode: 0o644 });
+    expect((await stat(file)).mode & 0o777).toBe(0o644);
+
+    const cache = new Cache<string>("perm-stale");
+    await cache.get("k", 10_000, () => Promise.resolve("v"));
+
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 });
 

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { cacheDataDir } from "./paths";
 
@@ -30,6 +30,7 @@ export class Cache<T> {
   private readonly inFlight = new Map<string, Promise<T>>();
   private readonly file: string;
   private hydrated: Promise<void> | null = null;
+  private hardenedFile = false;
 
   constructor(name: string) {
     this.file = join(cacheDataDir(), `${name}.json`);
@@ -67,8 +68,23 @@ export class Cache<T> {
     const serialized: Record<string, CacheEntry<T>> = {};
     for (const [key, entry] of this.memory) serialized[key] = entry;
     try {
-      await mkdir(dirname(this.file), { recursive: true });
-      await writeFile(this.file, JSON.stringify(serialized), "utf8");
+      // These files hold private issue and PR titles, bodies and comment
+      // threads (and, for the token cache this class no longer sees, the
+      // account's own GitHub token) — a directory and a mode the creating
+      // call gets right from the start, rather than a default 0755/0644
+      // anyone on the machine can read.
+      await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
+      await writeFile(this.file, JSON.stringify(serialized), { encoding: "utf8", mode: 0o600 });
+      if (!this.hardenedFile) {
+        // `writeFile`'s `mode` option only takes effect the moment it
+        // creates the file: a cache file an older build already wrote at
+        // 0644 keeps that mode forever unless something chmods it. One
+        // `chmod` per process, the first time this instance persists, is
+        // enough to bring a pre-existing file back in line without paying
+        // the syscall on every single write.
+        await chmod(this.file, 0o600);
+        this.hardenedFile = true;
+      }
     } catch (error) {
       // Persistence is a resume optimisation, not a correctness requirement:
       // a read-only disk should not fail the request that triggered the write.

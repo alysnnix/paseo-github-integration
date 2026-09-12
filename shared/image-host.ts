@@ -9,6 +9,14 @@
  * lives on the daemon — the app never sees it. Anything else the app loads
  * itself: sending the daemon after an arbitrary URL from a comment anyone
  * could have written is a fetch nobody asked for.
+ *
+ * `github.com` is narrowed to the `/user-attachments/` prefix this proxy
+ * exists to serve: the host check alone would let a comment's author pick
+ * any `github.com` path and have the daemon fetch it carrying the account's
+ * token, which is a forced authenticated request nobody asked the daemon to
+ * make. `*.githubusercontent.com` needs no such narrowing — it never receives
+ * the token (see `server/images/images.ts`'s redirect handling) and is where
+ * every other GitHub-hosted image, including raw content, actually lives.
  */
 export function isGitHubImageHost(url: string): boolean {
   // Parsed, never matched. A regex over the raw string decides on different
@@ -28,6 +36,7 @@ export function isGitHubImageHost(url: string): boolean {
   // host-confusion trick.
   if (host.username !== "" || host.password !== "") return false;
   const name = host.hostname.toLowerCase();
-  return name === "github.com" || name.endsWith(".githubusercontent.com");
+  if (name.endsWith(".githubusercontent.com")) return true;
+  return name === "github.com" && host.pathname.startsWith("/user-attachments/");
 }
 
