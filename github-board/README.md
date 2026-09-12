@@ -135,9 +135,10 @@ the HTML a bot like Dependabot writes, whose release notes show as collapsible s
 by the assignees. A pill in the panel's header says whether the item is still open, or has been closed or
 merged since the board was fetched.
 
-**Open on GitHub** is in the panel, next to **Send to chat**, so nothing the card used to do is
-gone — it is one press further away. **Refresh** reloads the description if it was edited on
-GitHub in the meantime; otherwise the panel remembers what it fetched for five minutes.
+**Approve**, **Merge**, **Send to chat** and **Open on GitHub** are in the panel, so nothing
+the card used to do is gone — it is one press further away. **Refresh** reloads the description
+if it was edited on GitHub in the meantime; otherwise the panel remembers what it fetched for
+five minutes.
 
 A **Load comments** button at the foot of the panel fetches the conversation — the comments on an
 issue or pull request, or a discussion's comments with their replies indented under them. It shows
@@ -157,6 +158,41 @@ card is outlined so you can see which one you are reading.
 ![A pull request open in the detail panel: repository and state at the top, the title, who opened
 it and when, its branches, Send to chat and Open on GitHub buttons, and the description below,
 with the board blurred behind it.](docs/detail-panel.png)
+
+## Approve and merge
+
+An open pull request's panel leads with two buttons the rest of the board does not
+need: **Approve** and **Merge**. Both act as the `gh` login on the daemon, and both
+repaint the panel from what GitHub answers after the write rather than from what
+the press assumed, so a review or a merge someone else landed in the meantime
+corrects the panel instead of being painted over by it.
+
+**Approve** submits an approving review with no comment. It reads **Approved** and
+stops being pressable once your own latest review on that pull request is an
+approval, and **Your pull request** on one you opened, because GitHub refuses to
+let you approve your own work. It stays available on a draft: a draft says the
+work is unfinished, not that it cannot be reviewed.
+
+**Merge** opens a dialog, and the dialog is the method picker: one button per way
+the repository allows a pull request to land, so a squash-only repository offers
+one button rather than three, two of which would fail. Pressing one merges, which
+is why the press that chooses is the press that confirms and why there is no
+selected-but-not-yet-confirmed state to misread. The dialog says what it says
+because it is true: this lands on the base branch straight away and Paseo cannot
+undo it.
+
+The button names its blocker rather than failing a press, so it reads **Draft**,
+**Conflicts**, **No merge access** on a repository you can only read, or
+**Checking...** while GitHub computes the test merge, which it answers for a few
+seconds after a push. **Refresh** is what resolves that last one.
+
+A merged pull request leaves the board with the merge: the columns are a
+`state:open` search, so it no longer belongs to any of them, and the card goes
+rather than waiting for the next refresh to notice. The open panel stays, now
+reading **Merged**.
+
+Approving needs a `gh` login with read access; merging needs write. Neither is
+offered on an issue or a discussion, which have nothing to approve.
 
 ## Labels
 
@@ -308,6 +344,12 @@ header tells you nothing about which account you are looking at.
 - A column that fails renders its own error; the other three still load.
 - **The label menu offers existing labels only**, the first 100 by name. Creating a
   label, or renaming one, still happens on GitHub.
+- **Approve submits an empty approval.** A review with a comment, a
+  changes-requested review and a dismissal all still happen on GitHub.
+- **Merge takes the repository's default merge settings and nothing else.** It
+  passes no commit title or body, does not delete the head branch afterwards,
+  and does not offer auto-merge for a pull request waiting on checks; Paseo's
+  own workspace PR pane is where auto-merge lives.
 - **Only a provider that names its models can be picked.** Paseo creates agents
   as `provider/model`, so a provider that offers no selectable model is left out
   of the agent list rather than shown and then refused.

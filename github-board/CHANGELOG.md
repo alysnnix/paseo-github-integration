@@ -7,6 +7,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Nothing here 
 registry: `paseo plugin add` follows a branch unless you pin `--ref <tag>`, so a version is a tag to
 pin and a line to read before you move.
 
+## [Unreleased]
+
+### Added
+
+- **Approve and merge a pull request from its panel.** Until now every write the board
+  offered was a label: a pull request you had already read here still had to be finished on
+  GitHub. **Approve** submits an approving review, and reads **Approved** once your own
+  latest review is one, or **Your pull request** on your own work, which GitHub refuses to
+  let you approve. **Merge** opens the repository's allowed methods, one button each, and
+  the press that picks is the press that merges, because there is nothing to confirm twice.
+  A button nobody can press names its blocker instead: **Draft**, **Conflicts**, **No merge
+  access**, or **Checking...** while GitHub computes the test merge. A merged pull request
+  leaves the board with the merge, since the columns are a `state:open` search, and the open
+  panel stays behind reading **Merged**.
+
 ## [0.5.0] — 2026-09-08
 
 ### Added

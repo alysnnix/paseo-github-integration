@@ -34,6 +34,8 @@ import type {
   ItemComment,
   ItemDetails,
   LaunchDefaults,
+  MergeMethod,
+  ReviewState,
   LinkedIssue,
   ProjectRef,
   PromptSet,
@@ -42,12 +44,14 @@ import type {
 } from "../shared/board";
 import {
   COLUMN_IDS,
+  approvePullRequest,
   listLabels,
   loadBoard,
   loadComments,
   loadImage,
   loadItem,
   legacySettingsTaken,
+  mergePullRequest,
   saveLogin,
   sendOptions,
   takeLegacySettings,
@@ -2805,6 +2809,169 @@ function absoluteDate(iso: string): string {
 }
 
 /**
+ * GitHub's own wording for the three ways a pull request lands, because the
+ * repository's settings and its merge button say the same, and a board that
+ * renamed them would leave the user guessing which setting they map to.
+ */
+const MERGE_METHOD_LABELS: Record<MergeMethod, string> = {
+  squash: "Squash and merge",
+  merge: "Create a merge commit",
+  rebase: "Rebase and merge",
+};
+
+/**
+ * What Approve says. A button nobody is allowed to press names the reason
+ * instead of the action: the press would fail on GitHub either way, and this
+ * way the panel answers the question before it is asked.
+ */
+function approveLabel(review: ReviewState): string {
+  if (review.viewerHasApproved) return "Approved";
+  if (review.viewerDidAuthor) return "Your pull request";
+  return "Approve";
+}
+
+/** The same for Merge, whose blockers are the branch rather than the author. */
+function mergeLabel(review: ReviewState, state: ItemDetails["state"]): string {
+  if (state === "merged") return "Merged";
+  if (state === "closed") return "Closed";
+  if (state === "draft") return "Draft";
+  if (review.mergeable === "conflicting") return "Conflicts";
+  // GitHub computes the test merge asynchronously and answers UNKNOWN until it
+  // has. Refresh is what resolves it, so the label points at waiting.
+  if (review.mergeable === "unknown") return "Checking...";
+  if (review.mergeMethods.length === 0) return "No method allowed";
+  if (!review.viewerCanMerge) return "No merge access";
+  return "Merge";
+}
+
+/**
+ * The two write actions on a pull request, beside the two that were always
+ * there. Rendered only for a pull request, because `review` is null on
+ * anything else, and disabled from the server's own capability flags rather
+ * than from a guess made here.
+ */
+function ReviewActions({
+  item,
+  details,
+  styles,
+  busy,
+  onApprove,
+  onMerge,
+}: {
+  item: BoardItem;
+  details: ItemDetails;
+  styles: Styles;
+  busy: boolean;
+  onApprove: () => void;
+  onMerge: () => void;
+}) {
+  const review = details.review;
+  if (review === null) return null;
+  const canApprove = review.viewerCanApprove && !review.viewerHasApproved && !busy;
+  const canMerge = review.viewerCanMerge && !busy;
+  return (
+    <>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Approve ${item.repository} #${item.number}`}
+        disabled={!canApprove}
+        style={({ pressed }) => [
+          styles.ghostButton,
+          canApprove ? null : styles.buttonDisabled,
+          pressed ? styles.sendButtonPressed : null,
+        ]}
+        onPress={onApprove}
+      >
+        <Text style={styles.ghostButtonLabel}>{approveLabel(review)}</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Merge ${item.repository} #${item.number}`}
+        disabled={!canMerge}
+        style={({ pressed }) => [
+          styles.ghostButton,
+          canMerge ? null : styles.buttonDisabled,
+          pressed ? styles.sendButtonPressed : null,
+        ]}
+        onPress={onMerge}
+      >
+        <Text style={styles.ghostButtonLabel}>{mergeLabel(review, details.state)}</Text>
+      </Pressable>
+    </>
+  );
+}
+
+/**
+ * The merge confirmation, which is also the method picker: each button is one
+ * way to land the pull request, so the press that confirms is the press that
+ * chooses, and there is no selected-but-not-yet-confirmed state to misread.
+ *
+ * Only the methods the repository allows are offered, so a squash-only
+ * repository shows one button rather than three, two of which would fail.
+ */
+function MergeDialog({
+  item,
+  methods,
+  busy,
+  styles,
+  onCancel,
+  onMerge,
+}: {
+  item: BoardItem;
+  methods: readonly MergeMethod[];
+  busy: boolean;
+  styles: Styles;
+  onCancel: () => void;
+  onMerge: (method: MergeMethod) => void;
+}) {
+  return (
+    <Modal
+      title={`Merge #${item.number}`}
+      open
+      onOpenChange={(next: boolean) => {
+        if (!next && !busy) onCancel();
+      }}
+    >
+      <Modal.Content contentContainerStyle={styles.dialogBody}>
+        <Text style={styles.subtle} numberOfLines={2}>
+          {item.repository} · {item.title}
+        </Text>
+        <Text style={styles.detailMeta}>
+          This lands on the base branch straight away. Paseo cannot undo it.
+        </Text>
+        {methods.map((method) => (
+          <Pressable
+            key={method}
+            accessibilityRole="button"
+            disabled={busy}
+            style={({ pressed }) => [
+              styles.button,
+              busy ? styles.buttonDisabled : null,
+              pressed ? styles.sendButtonPressed : null,
+            ]}
+            onPress={() => onMerge(method)}
+          >
+            <Text style={styles.buttonLabel}>{MERGE_METHOD_LABELS[method]}</Text>
+          </Pressable>
+        ))}
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          style={({ pressed }) => [
+            styles.ghostButton,
+            busy ? styles.buttonDisabled : null,
+            pressed ? styles.sendButtonPressed : null,
+          ]}
+          onPress={onCancel}
+        >
+          <Text style={styles.ghostButtonLabel}>Cancel</Text>
+        </Pressable>
+      </Modal.Content>
+    </Modal>
+  );
+}
+
+/**
  * One card, opened: what the card already shows, then the body the search
  * never fetched. The card's own fields paint at once and the body follows —
  * the panel is the only thing waiting on `gh`, so the board never is.
@@ -2824,6 +2991,7 @@ function ItemDetailPanel({
   onWidthCommitted,
   onClose,
   onSend,
+  onMerged,
 }: {
   item: BoardItem;
   type: ColumnId;
@@ -2848,6 +3016,11 @@ function ItemDetailPanel({
   onWidthCommitted: (fraction: number) => void;
   onClose: () => void;
   onSend: (item: BoardItem, type: ColumnId) => void;
+  /**
+   * A merged pull request leaves the board's `state:open` search, so the card
+   * goes with it rather than waiting for the next refresh to notice.
+   */
+  onMerged: (itemId: string) => void;
 }) {
   const load = useRpc(loadItem);
   /**
@@ -2960,6 +3133,12 @@ function ItemDetailPanel({
   /** Bumped by Refresh; anything past the first load bypasses the server cache. */
   const [generation, setGeneration] = useState(0);
   const listComments = useRpc(loadComments);
+  const approve = useRpc(approvePullRequest);
+  const merge = useRpc(mergePullRequest);
+  const toast = useToast();
+  /** One write at a time, and both buttons off while it is in flight. */
+  const [acting, setActing] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   /**
    * Null until the button at the bottom is pressed: comments are the long
    * tail of an item, and most panels are opened for the description. Refresh
@@ -3004,6 +3183,43 @@ function ItemDetailPanel({
     setGeneration((current) => current + 1);
     setCommentsRequest((current) => (current === null ? null : { force: true }));
   }, []);
+
+  /**
+   * Both writes repaint from what the handler answers, which is the item
+   * re-read from GitHub after the mutation rather than the state this client
+   * assumed. A failure is a toast and nothing else: the panel still shows what
+   * GitHub last said, which is still true.
+   */
+  const runApprove = useCallback(() => {
+    setActing(true);
+    approve({ id: item.id, body: "" })
+      .then((next) => {
+        setDetails(next);
+        toast.show(`Approved ${item.repository} #${item.number}.`, { variant: "success" });
+      })
+      .catch((cause: unknown) => {
+        toast.error(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => setActing(false));
+  }, [approve, item.id, item.number, item.repository, toast]);
+
+  const runMerge = useCallback(
+    (method: MergeMethod) => {
+      setActing(true);
+      merge({ id: item.id, method })
+        .then((next) => {
+          setDetails(next);
+          setMergeOpen(false);
+          onMerged(item.id);
+          toast.show(`Merged ${item.repository} #${item.number}.`, { variant: "success" });
+        })
+        .catch((cause: unknown) => {
+          toast.error(cause instanceof Error ? cause.message : String(cause));
+        })
+        .finally(() => setActing(false));
+    },
+    [item.id, item.number, item.repository, merge, onMerged, toast],
+  );
 
   useEffect(() => {
     let live = true;
@@ -3133,6 +3349,16 @@ function ItemDetailPanel({
           </View>
         ) : null}
         <View style={styles.detailActions}>
+          {details !== null ? (
+            <ReviewActions
+              item={item}
+              details={details}
+              styles={styles}
+              busy={acting}
+              onApprove={runApprove}
+              onMerge={() => setMergeOpen(true)}
+            />
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Send ${item.repository} #${item.number} to a new workspace chat`}
@@ -3245,6 +3471,16 @@ function ItemDetailPanel({
           </>
         )}
       </ScrollView>
+      {mergeOpen && details?.review ? (
+        <MergeDialog
+          item={item}
+          methods={details.review.mergeMethods}
+          busy={acting}
+          styles={styles}
+          onCancel={() => setMergeOpen(false)}
+          onMerge={runMerge}
+        />
+      ) : null}
     </Animated.View>
   );
 }
@@ -3764,6 +4000,25 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     setBoard((current) => (current === null ? current : patch(current)));
   }, []);
 
+  /**
+   * Takes one card off the board, for a pull request that has just been
+   * merged: the columns are a `state:open` search, so it no longer belongs to
+   * any of them. The cached board is patched alongside the rendered one for
+   * the same reason the label edit does it, and the open panel survives on the
+   * item it was given, now reading "Merged".
+   */
+  const dropItem = useCallback((itemId: string) => {
+    const patch = (current: Board): Board => ({
+      ...current,
+      columns: current.columns.map((column) => ({
+        ...column,
+        items: column.items.filter((item) => item.id !== itemId),
+      })),
+    });
+    if (cachedBoard !== null) cachedBoard = patch(cachedBoard);
+    setBoard((current) => (current === null ? current : patch(current)));
+  }, []);
+
   const openDetails = useCallback((item: BoardItem, type: ColumnId) => {
     setDetailTarget({ item, type });
     setDetailOpen(true);
@@ -4039,6 +4294,7 @@ export function GitHubBoard(props: PluginSurfaceProps) {
               progress={detailProgress}
               onClose={closeDetails}
               onSend={openSendDialog}
+              onMerged={dropItem}
             />
           ) : null}
         </View>

@@ -348,6 +348,52 @@ export const toggleLabel = defineRpc({
 });
 
 /**
+ * How a merge lands on the base branch. The three GitHub allows, spelled the
+ * way a repository's settings spell them. A repository can forbid any of them,
+ * which is why `ReviewState` carries the ones it permits rather than the panel
+ * assuming all three.
+ */
+export const MergeMethodSchema = z.enum(["merge", "squash", "rebase"]);
+
+export type MergeMethod = z.output<typeof MergeMethodSchema>;
+
+/**
+ * Everything the panel needs to decide whether Approve and Merge are pressable,
+ * answered by GitHub rather than guessed on the client. Null on anything that
+ * is not a pull request.
+ *
+ * The two capability flags are folded here rather than left to the client
+ * because each is several facts at once (who authored it, what the viewer's
+ * permission on the repository is, whether the branch still merges), and a
+ * client that recomputed them would drift from the server that acts on them.
+ */
+export const ReviewStateSchema = z.object({
+  /**
+   * Whether the viewer's own latest review is an approval. GitHub's
+   * `reviewDecision` is not that question: it stays null on a repository that
+   * requires no review, however many approvals the pull request has, so a
+   * button keyed on it would still read "Approve" right after approving.
+   */
+  viewerHasApproved: z.boolean(),
+  /**
+   * GitHub refuses an approval on your own pull request, so the button says so
+   * instead of offering a press that always fails.
+   */
+  viewerDidAuthor: z.boolean(),
+  viewerCanApprove: z.boolean(),
+  viewerCanMerge: z.boolean(),
+  /**
+   * `unknown` is GitHub still computing the merge commit, not a failure: it
+   * answers that for a few seconds after a push. Refresh is what resolves it.
+   */
+  mergeable: z.enum(["mergeable", "conflicting", "unknown"]),
+  /** The methods this repository allows, in the order the picker offers them. */
+  mergeMethods: z.array(MergeMethodSchema),
+});
+
+export type ReviewState = z.output<typeof ReviewStateSchema>;
+
+/**
  * What a card knows about itself already — title, repository, labels, author —
  * is left off this shape on purpose: the panel paints those from the card the
  * moment it opens, and this round trip only adds what the search never fetched.
@@ -366,6 +412,8 @@ export const ItemDetailsSchema = z.object({
   assignees: z.array(z.string()),
   /** Pull requests only: the branch under review and the one it targets. */
   branches: z.object({ head: z.string(), base: z.string() }).nullable(),
+  /** Pull requests only: what Approve and Merge are allowed to do right now. */
+  review: ReviewStateSchema.nullable(),
 });
 
 export type ItemDetails = z.output<typeof ItemDetailsSchema>;
@@ -382,6 +430,43 @@ export const loadItem = defineRpc({
     id: z.string().min(1),
     /** Set by the panel's Refresh button to bypass the server's short-lived cache. */
     force: z.boolean().default(false),
+  }),
+  output: ItemDetailsSchema,
+});
+
+/**
+ * Approves one pull request, and answers with the item as GitHub reports it
+ * *after* the review. That is the contract the label toggle keeps, and for the
+ * same reason: the panel repaints from the forge's answer rather than from
+ * what the press assumed, so a decision someone else changed in the meantime
+ * corrects the panel instead of being painted over by it.
+ *
+ * An empty body is an approval with no comment, which is what pressing the
+ * button alone means.
+ */
+export const approvePullRequest = defineRpc({
+  name: "board.approve",
+  input: z.object({
+    /** The pull request node id, the same id every card carries. */
+    id: z.string().min(1),
+    body: z.string().default(""),
+  }),
+  output: ItemDetailsSchema,
+});
+
+/**
+ * Merges one pull request with the method the picker chose, and answers with
+ * the refreshed item, whose `state` is then `merged`.
+ *
+ * The method is required rather than defaulted: a repository that forbids
+ * squashing and one that forbids merge commits would otherwise land the same
+ * press differently, and this is the one action here that cannot be undone.
+ */
+export const mergePullRequest = defineRpc({
+  name: "board.merge",
+  input: z.object({
+    id: z.string().min(1),
+    method: MergeMethodSchema,
   }),
   output: ItemDetailsSchema,
 });

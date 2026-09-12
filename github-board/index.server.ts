@@ -1,12 +1,14 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 
 import {
+  approveHandler,
   listLabelsHandler,
   loadBoardHandler,
   loadCommentsHandler,
   loadImageHandler,
   loadItemHandler,
   legacySettingsTakenHandler,
+  mergeHandler,
   saveLoginHandler,
   takeLegacySettingsHandler,
   sendOptionsHandler,
@@ -14,12 +16,14 @@ import {
   toggleLabelHandler,
 } from "./server/board";
 import {
+  approvePullRequest,
   listLabels,
   loadBoard,
   loadComments,
   loadImage,
   loadItem,
   legacySettingsTaken,
+  mergePullRequest,
   saveLogin,
   takeLegacySettings,
   sendOptions,
@@ -40,6 +44,8 @@ export default function contribute(server: PluginServerContext) {
   server.handle(sendToChat, sendToChatHandler);
   server.handle(listLabels, listLabelsHandler);
   server.handle(toggleLabel, toggleLabelHandler);
+  server.handle(approvePullRequest, approveHandler);
+  server.handle(mergePullRequest, mergeHandler);
 
   // Storage lives on the host; registering the definitions is what makes the
   // client's `useSettings` reads and writes valid for this installation.

@@ -11,17 +11,21 @@ import type {
   CheckSummary,
   ItemComment,
   ItemDetails,
+  MergeMethod,
   RepositoryLabel,
+  ReviewState,
   LaunchDefaults,
   LinkedIssue,
   PromptSet,
   PromptSettings,
+  approvePullRequest,
   legacySettingsTaken,
   listLabels,
   loadBoard,
   loadComments,
   loadImage,
   loadItem,
+  mergePullRequest,
   saveLogin,
   sendOptions,
   sendToChat,
@@ -1110,7 +1114,15 @@ const ITEM_QUERY = `query($id: ID!) {
     }
     ... on PullRequest {
       body state isDraft createdAt baseRefName headRefName
+      viewerDidAuthor mergeable
+      viewerLatestReview { state }
       assignees(first: 20) { nodes { login } }
+      repository {
+        viewerPermission
+        mergeCommitAllowed
+        squashMergeAllowed
+        rebaseMergeAllowed
+      }
     }
     ... on Discussion { body closed createdAt }
   }
@@ -1125,6 +1137,15 @@ interface GhItemNode {
   baseRefName?: unknown;
   headRefName?: unknown;
   assignees?: { nodes?: unknown };
+  viewerLatestReview?: { state?: unknown };
+  viewerDidAuthor?: unknown;
+  mergeable?: unknown;
+  repository?: {
+    viewerPermission?: unknown;
+    mergeCommitAllowed?: unknown;
+    squashMergeAllowed?: unknown;
+    rebaseMergeAllowed?: unknown;
+  };
 }
 
 function itemStateOf(node: GhItemNode): ItemDetails["state"] {
@@ -1134,6 +1155,60 @@ function itemStateOf(node: GhItemNode): ItemDetails["state"] {
   return "open";
 }
 
+/** Repository permissions that let the viewer press Merge. */
+const MERGE_PERMISSIONS: Record<string, true> = { ADMIN: true, MAINTAIN: true, WRITE: true };
+
+/**
+ * GitHub answers `UNKNOWN` while it computes the test merge, for a few seconds
+ * after a push, so an unknown is a "not yet" rather than a conflict. Merge
+ * stays off for both, because only `MERGEABLE` is a merge that would land.
+ */
+function mergeableOf(value: unknown): ReviewState["mergeable"] {
+  if (value === "MERGEABLE") return "mergeable";
+  if (value === "CONFLICTING") return "conflicting";
+  return "unknown";
+}
+
+/** Squash first because it is the common default, then merge, then rebase. */
+function mergeMethodsOf(repository: GhItemNode["repository"]): MergeMethod[] {
+  const candidates: readonly (readonly [MergeMethod, unknown])[] = [
+    ["squash", repository?.squashMergeAllowed],
+    ["merge", repository?.mergeCommitAllowed],
+    ["rebase", repository?.rebaseMergeAllowed],
+  ];
+  return candidates.filter(([, allowed]) => allowed === true).map(([method]) => method);
+}
+
+/**
+ * What the panel is allowed to do with this pull request, decided here rather
+ * than on the client so the buttons and the mutations cannot disagree.
+ *
+ * A draft can be reviewed, so Approve stays on for one; it cannot be merged
+ * without being marked ready, which is a decision this board does not make, so
+ * Merge stays off rather than offering a press that always fails.
+ */
+function toReviewState(node: GhItemNode, state: ItemDetails["state"]): ReviewState {
+  const viewerDidAuthor = node.viewerDidAuthor === true;
+  const mergeable = mergeableOf(node.mergeable);
+  const settled = state === "merged" || state === "closed";
+  const permission = node.repository?.viewerPermission;
+  const canWrite = typeof permission === "string" && MERGE_PERMISSIONS[permission] === true;
+  const mergeMethods = mergeMethodsOf(node.repository);
+  // The viewer's own latest review is the only thing that answers "have I
+  // approved this?": a review someone else left is not it, and a dismissed or
+  // superseded one is not either.
+  const viewerHasApproved = node.viewerLatestReview?.state === "APPROVED";
+  return {
+    viewerHasApproved,
+    viewerDidAuthor,
+    viewerCanApprove: !viewerDidAuthor && !settled,
+    viewerCanMerge:
+      canWrite && state === "open" && mergeable === "mergeable" && mergeMethods.length > 0,
+    mergeable,
+    mergeMethods,
+  };
+}
+
 function toItemDetails(node: GhItemNode): ItemDetails {
   const assigneeNodes = node.assignees?.nodes;
   const assignees = Array.isArray(assigneeNodes)
@@ -1141,15 +1216,20 @@ function toItemDetails(node: GhItemNode): ItemDetails {
         .map((assignee) => (assignee as { login?: unknown }).login)
         .filter((login): login is string => typeof login === "string")
     : [];
+  const state = itemStateOf(node);
+  const branches =
+    typeof node.headRefName === "string" && typeof node.baseRefName === "string"
+      ? { head: node.headRefName, base: node.baseRefName }
+      : null;
   return {
-    state: itemStateOf(node),
+    state,
     body: typeof node.body === "string" ? node.body : "",
     createdAt: typeof node.createdAt === "string" ? node.createdAt : "",
     assignees,
-    branches:
-      typeof node.headRefName === "string" && typeof node.baseRefName === "string"
-        ? { head: node.headRefName, base: node.baseRefName }
-        : null,
+    branches,
+    // Branches are what makes it a pull request: an issue has none, and a
+    // discussion has neither branches nor anything to approve.
+    review: branches === null ? null : toReviewState(node, state),
   };
 }
 
@@ -1182,6 +1262,93 @@ export async function loadItemHandler({
   }
   const details = await fetchItemDetails(id);
   cachedDetails.set(id, { details, storedAt: Date.now() });
+  return details;
+}
+
+const APPROVE_MUTATION = `mutation($id: ID!, $body: String!) {
+  addPullRequestReview(input: { pullRequestId: $id, event: APPROVE, body: $body }) {
+    pullRequestReview { state }
+  }
+}`;
+
+const MERGE_MUTATION = `mutation($id: ID!, $method: PullRequestMergeMethod!) {
+  mergePullRequest(input: { pullRequestId: $id, mergeMethod: $method }) {
+    pullRequest { state }
+  }
+}`;
+
+const MERGE_METHOD_NAMES: Record<MergeMethod, string> = {
+  merge: "MERGE",
+  squash: "SQUASH",
+  rebase: "REBASE",
+};
+
+/**
+ * A mutation, and the errors GitHub reports in a 200 body rather than as an
+ * exit status. `gh` usually fails the process on those, but a partial error
+ * beside partial data does not, and a merge that silently did nothing is the
+ * one outcome this must never report as success.
+ */
+async function ghMutation(query: string, variables: Record<string, string>): Promise<void> {
+  const args = ["api", "graphql", "-f", `query=${query}`];
+  for (const [name, value] of Object.entries(variables)) {
+    args.push("-f", `${name}=${value}`);
+  }
+  const parsed: unknown = JSON.parse(await gh(args));
+  const errors =
+    typeof parsed === "object" && parsed !== null && "errors" in parsed ? parsed.errors : null;
+  if (!Array.isArray(errors) || errors.length === 0) return;
+  const message = errors
+    .map((entry) =>
+      typeof entry === "object" && entry !== null && "message" in entry ? entry.message : null,
+    )
+    .filter((entry): entry is string => typeof entry === "string" && entry !== "")
+    .join("; ");
+  throw new Error(message === "" ? "GitHub rejected the request." : message);
+}
+
+/**
+ * Re-reads the item past the cache and stores what came back, so the panel
+ * repaints from GitHub's state after the write rather than from the caller's
+ * assumption about it.
+ */
+async function refreshDetails(id: string): Promise<ItemDetails> {
+  const details = await fetchItemDetails(id);
+  cachedDetails.set(id, { details, storedAt: Date.now() });
+  return details;
+}
+
+/**
+ * Drops one card from the cached board. A merged pull request no longer
+ * answers the `state:open` search the board runs, so leaving it in the cache
+ * would show it as open again for up to five minutes after it landed.
+ */
+function dropCachedItem(itemId: string): void {
+  if (cachedBoard === null) return;
+  cachedBoard = {
+    ...cachedBoard,
+    columns: cachedBoard.columns.map((column) => ({
+      ...column,
+      items: column.items.filter((item) => item.id !== itemId),
+    })),
+  };
+}
+
+export async function approveHandler({
+  id,
+  body,
+}: z.output<typeof approvePullRequest.input>): Promise<z.input<typeof approvePullRequest.output>> {
+  await ghMutation(APPROVE_MUTATION, { id, body });
+  return refreshDetails(id);
+}
+
+export async function mergeHandler({
+  id,
+  method,
+}: z.output<typeof mergePullRequest.input>): Promise<z.input<typeof mergePullRequest.output>> {
+  await ghMutation(MERGE_MUTATION, { id, method: MERGE_METHOD_NAMES[method] });
+  const details = await refreshDetails(id);
+  dropCachedItem(id);
   return details;
 }
 
