@@ -1,5 +1,5 @@
 {
-  description = "Paseo plugins, packaged for Nix";
+  description = "The GitHub integration plugin for Paseo, packaged for Nix";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -21,17 +21,17 @@
     in
     {
       packages = forAllSystems (pkgs: {
-        github-board = pkgs.callPackage ./nix/github-board.nix { };
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.github-board;
+        github-integration = pkgs.callPackage ./nix/plugin.nix { };
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.github-integration;
       });
 
       # The daemon reads the plugin straight from the store path, so a build is
       # the whole check there is: nothing is compiled here, and the typecheck
       # needs the npm dev tree, which lives with a clone rather than with this
-      # flake. `npm run typecheck` in the plugin directory is still the gate for
+      # flake. `npm run typecheck` at the repository root is still the gate for
       # a source change.
       checks = forAllSystems (pkgs: {
-        github-board = self.packages.${pkgs.stdenv.hostPlatform.system}.github-board;
+        github-integration = self.packages.${pkgs.stdenv.hostPlatform.system}.github-integration;
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);

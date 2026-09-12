@@ -460,6 +460,24 @@ export function useStyles({ theme, layout }: PluginSurfaceProps) {
         color: colors.foreground,
         fontSize: layout.compact ? 14 : 12,
       },
+      /** An owner's heading inside the repository list: bolder, and its own toggle. */
+      dropdownGroupLabel: {
+        flex: 1,
+        minWidth: 0,
+        color: colors.foreground,
+        fontSize: layout.compact ? 14 : 12,
+        fontWeight: "600" as const,
+      },
+      /** The count beside an owner, so a collapsed-looking group still says how much it holds. */
+      dropdownGroupCount: { color: colors.foregroundMuted, fontSize: 11 },
+      /** A repository under its owner, indented by one checkbox's width plus the row gap. */
+      dropdownChildRow: { paddingLeft: layout.compact ? 36 : 32 },
+      /**
+       * A group whose repositories are only partly shown. Filled like a checked
+       * box but carrying a dash, because "some" is not "none" and a blank box
+       * would say the owner is hidden entirely.
+       */
+      checkboxPartial: { backgroundColor: colors.foregroundMuted, borderColor: colors.foregroundMuted },
       backdrop: {
         position: "absolute" as const,
         top: 0,

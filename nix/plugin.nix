@@ -11,22 +11,23 @@
 # for its version and for the typecheck a developer runs from a clone, not for
 # anything the daemon resolves.
 stdenvNoCC.mkDerivation (finalAttrs: {
-  pname = "paseo-github-board";
+  pname = "paseo-github-integration";
   version = "0.5.0";
 
-  # A file set rather than the directory: `node_modules`, the docs screenshots
-  # and the lockfile have no business in the store path the daemon reads, and a
-  # local `npm install` must not change this derivation's hash.
+  # A file set rather than the directory: the repository root is also the plugin
+  # root now, so `node_modules`, the lockfile, the docs screenshots, the flake
+  # and the Markdown around them would otherwise all land in the store path the
+  # daemon reads — and a local `npm install` would change this derivation's hash.
   src = lib.fileset.toSource {
-    root = ../github-board;
+    root = ../.;
     fileset = lib.fileset.unions [
-      ../github-board/paseo-plugin.json
-      ../github-board/package.json
-      ../github-board/index.client.tsx
-      ../github-board/index.server.ts
-      ../github-board/client
-      ../github-board/server
-      ../github-board/shared
+      ../paseo-plugin.json
+      ../package.json
+      ../index.client.tsx
+      ../index.server.ts
+      ../client
+      ../server
+      ../shared
     ];
   };
 
@@ -42,8 +43,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # so a manifest that drifted from the name this package is wired under would
     # fail at daemon start instead of here.
     id=$(jq -r .id paseo-plugin.json)
-    if [ "$id" != "github-board" ]; then
-      echo "paseo-plugin.json declares id '$id', expected 'github-board'" >&2
+    if [ "$id" != "github-integration" ]; then
+      echo "paseo-plugin.json declares id '$id', expected 'github-integration'" >&2
       exit 1
     fi
 
@@ -54,8 +55,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   '';
 
   meta = {
-    description = "Paseo sidebar board for GitHub issues, pull requests and discussions";
-    homepage = "https://github.com/gpambrozio/paseo-plugins";
+    description = "GitHub issues, pull requests, projects and review inside Paseo";
+    homepage = "https://github.com/alysnnix/paseo-github-integration";
     license = lib.licenses.mit;
     platforms = lib.platforms.all;
   };
