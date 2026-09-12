@@ -1,0 +1,41 @@
+name: CI
+
+# Runs on every push and pull request. One Node version, because Paseo ships
+# one supported runtime for its plugins — a matrix here would test versions
+# nobody runs the daemon on.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: typecheck, lint, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm test
+
+  nix:
+    name: nix build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: DeterminateSystems/nix-installer-action@v24
+
+      - run: nix build .#github-integration --print-build-logs

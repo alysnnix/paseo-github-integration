@@ -173,6 +173,18 @@ function convertSegment(html: string): string {
     emit(decodeEntities(text));
   }
 
+  /**
+   * One tag, dispatched by name. A long dispatch is the honest shape here:
+   * each case is a distinct HTML tag with its own one- or two-line Markdown
+   * rewrite, sharing the `emit`/`newline`/`lineBreak` helpers and the
+   * `lists`/`links`/`tables`/`quoteDepth` state above, so splitting it into
+   * per-tag functions would only replace the switch with an equally long
+   * chain of calls carrying that same state between them. The fallthrough
+   * groups below (headings, inline-code tags, bold tags) are collapsed into
+   * their own guards first, since those really were repetition rather than
+   * dispatch.
+   */
+  // oxlint-disable-next-line complexity -- a tag-name dispatch over N HTML tags is one function by nature; see the doc comment above.
   function onTag(closing: boolean, name: string, attributes: string): void {
     if (preDepth > 0) {
       // Inside <pre>, only its own end matters; the <code> around the
@@ -181,6 +193,18 @@ function convertSegment(html: string): string {
         preDepth -= 1;
         emit("\n```\n");
       }
+      return;
+    }
+    if (/^h[1-6]$/.test(name)) {
+      emit(closing ? "\n\n" : `\n\n${"#".repeat(Number(name[1]))} `);
+      return;
+    }
+    if (name === "code" || name === "tt" || name === "samp" || name === "kbd") {
+      emit("`");
+      return;
+    }
+    if (name === "strong" || name === "b") {
+      emit("**");
       return;
     }
     switch (name) {
@@ -199,14 +223,6 @@ function convertSegment(html: string): string {
           return;
         }
         emit("\n\n");
-        return;
-      case "h1":
-      case "h2":
-      case "h3":
-      case "h4":
-      case "h5":
-      case "h6":
-        emit(closing ? "\n\n" : `\n\n${"#".repeat(Number(name[1]))} `);
         return;
       case "blockquote":
         if (closing) {
@@ -247,16 +263,6 @@ function convertSegment(html: string): string {
       case "pre":
         preDepth += 1;
         emit("\n```\n");
-        return;
-      case "code":
-      case "tt":
-      case "samp":
-      case "kbd":
-        emit("`");
-        return;
-      case "strong":
-      case "b":
-        emit("**");
         return;
       case "a": {
         if (closing) {

@@ -23,10 +23,11 @@ import {
 import { useCallback, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
 
-import type { PromptSettings } from "../shared/board";
-import { saveLogin } from "../shared/board";
-import { displaySettings, normalizePrompts, promptSettings } from "../shared/settings";
-import { EMPTY_PROMPTS, PromptSettingsView, useStyles } from "./board";
+import type { PromptSettings } from "../../shared/board";
+import { saveLogin } from "../../shared/board";
+import { displaySettings, normalizePrompts, promptSettings } from "../../shared/settings";
+import { useStyles } from "../theme/use-styles";
+import { EMPTY_PROMPTS, PromptSettingsView } from "./prompt-settings-view";
 
 /**
  * Strips what a pasted `@owner` or stray whitespace would otherwise turn into

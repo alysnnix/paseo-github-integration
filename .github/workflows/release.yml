@@ -1,0 +1,135 @@
+# Release verification, for anyone pulling a tagged release instead of
+# following `paseo plugin add`'s branch default:
+#
+#   git verify-tag vX.Y.Z
+#     Confirms the tag was signed by a key alysnnix has registered with
+#     GitHub, fetched from https://github.com/alysnnix.gpg and
+#     https://github.com/alysnnix.keys. No private key, and no key material
+#     at all, lives in this repository or in a workflow secret — a release
+#     always traces back to whatever the maintainer currently has on file
+#     with GitHub, which they can rotate without touching this workflow.
+#
+#   sha256sum -c SHA256SUMS
+#     After downloading both files from the release, confirms the tarball is
+#     byte-for-byte the one this workflow built and published.
+#
+#   gh attestation verify paseo-github-integration-X.Y.Z.tar.gz \
+#     --repo alysnnix/paseo-github-integration
+#     Confirms the tarball was built by *this* workflow, in *this*
+#     repository, from a run that started at the tag verified above — GitHub
+#     Actions' own OIDC-signed provenance, which is why the publish job below
+#     asks for `id-token: write` (to mint the OIDC token identifying the run)
+#     and `attestations: write` (to publish the resulting attestation), and
+#     nothing that looks like a signing secret.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-tag:
+    name: verify signed tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: fetch alysnnix's registered public keys
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keys"
+          curl -fsSL https://github.com/alysnnix.gpg -o "$RUNNER_TEMP/keys/alysnnix.gpg" || true
+          curl -fsSL https://github.com/alysnnix.keys -o "$RUNNER_TEMP/keys/alysnnix.keys" || true
+
+      - name: verify the tag is signed
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          verified=0
+
+          if [ -s "$RUNNER_TEMP/keys/alysnnix.gpg" ]; then
+            export GNUPGHOME="$RUNNER_TEMP/gnupg"
+            mkdir -m 700 -p "$GNUPGHOME"
+            gpg --batch --import "$RUNNER_TEMP/keys/alysnnix.gpg"
+            git config gpg.format openpgp
+            if git verify-tag "$TAG"; then
+              verified=1
+            fi
+          fi
+
+          if [ "$verified" -ne 1 ] && [ -s "$RUNNER_TEMP/keys/alysnnix.keys" ]; then
+            awk '{ print "alysnnix", $1, $2 }' "$RUNNER_TEMP/keys/alysnnix.keys" \
+              > "$RUNNER_TEMP/keys/allowed_signers"
+            git config gpg.format ssh
+            git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/keys/allowed_signers"
+            if git verify-tag "$TAG"; then
+              verified=1
+            fi
+          fi
+
+          if [ "$verified" -ne 1 ]; then
+            echo "::error::${TAG} is not signed by a key alysnnix has registered with GitHub"
+            exit 1
+          fi
+
+  release:
+    name: build and publish
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    # `contents: write` creates the GitHub Release itself. The other two
+    # exist only for `attest-build-provenance`: see the file header above.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: check the tag matches package.json and CHANGELOG.md
+        run: node scripts/verify-release.mjs "${GITHUB_REF_NAME}"
+
+      - name: extract this version's release notes
+        run: |
+          node scripts/verify-release.mjs "${GITHUB_REF_NAME}" --notes \
+            > "$RUNNER_TEMP/release-notes.md"
+
+      - name: build the source tarball
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="paseo-github-integration-${VERSION}"
+          STAGE="$RUNNER_TEMP/dist/${NAME}"
+          mkdir -p "$STAGE"
+          # Exactly what the plugin ships: no lockfile, no docs, no CI.
+          cp -r paseo-plugin.json package.json index.client.tsx index.server.ts \
+            client server shared "$STAGE/"
+          tar -C "$RUNNER_TEMP/dist" -czf "$RUNNER_TEMP/dist/${NAME}.tar.gz" "${NAME}"
+          ( cd "$RUNNER_TEMP/dist" && sha256sum "${NAME}.tar.gz" > SHA256SUMS )
+          echo "RELEASE_NAME=${NAME}" >> "$GITHUB_ENV"
+
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: "${{ runner.temp }}/dist/${{ env.RELEASE_NAME }}.tar.gz"
+
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            "$RUNNER_TEMP/dist/${RELEASE_NAME}.tar.gz" \
+            "$RUNNER_TEMP/dist/SHA256SUMS" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

@@ -1,7 +1,7 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 
-import { GitHubBoard } from "./client/board";
-import { BoardSettingsScreen } from "./client/settings-screen";
+import { GitHubBoard } from "./client/board/GitHubBoard";
+import { BoardSettingsScreen } from "./client/settings/settings-screen";
 import { BoardTimelineCard } from "./client/timeline";
 import { BoardTimelineItemSchema } from "./shared/board";
 import { BOARD_ITEM_TIMELINE_KIND, BOARD_ITEM_TIMELINE_VERSION } from "./shared/timeline";
@@ -41,8 +41,8 @@ export default function contribute(client: PluginClientContext) {
     icon: "Settings",
     keywords: ["github", "prompts", "templates", "login"],
     context: "global",
-    onSelect({ openSettings }) {
-      openSettings("board");
+    onSelect(context) {
+      context.openSettings("board");
     },
   });
   client.addCommandCenterItem({
@@ -51,8 +51,8 @@ export default function contribute(client: PluginClientContext) {
     icon: "Github",
     keywords: ["github", "issues", "pull requests", "prs", "discussions"],
     context: "global",
-    onSelect({ openSurface }) {
-      openSurface("board");
+    onSelect(context) {
+      context.openSurface("board");
     },
   });
 

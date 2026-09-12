@@ -1,22 +1,19 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 
+import { loadBoardHandler } from "./server/board/handler";
+import { listLabelsHandler, toggleLabelHandler } from "./server/items/labels";
+import { loadCommentsHandler } from "./server/items/comments";
+import { approveHandler, mergeHandler } from "./server/items/review";
+import { loadItemHandler } from "./server/items/details";
+import { loadImageHandler } from "./server/images/images";
+import { sendOptionsHandler, sendToChatHandler } from "./server/launch/handler";
+import { listProjectsHandler } from "./server/projects/list";
+import { loadProjectHandler } from "./server/projects/single";
 import {
-  approveHandler,
-  listLabelsHandler,
-  listProjectsHandler,
-  loadBoardHandler,
-  loadCommentsHandler,
-  loadImageHandler,
-  loadItemHandler,
-  loadProjectHandler,
   legacySettingsTakenHandler,
-  mergeHandler,
   saveLoginHandler,
   takeLegacySettingsHandler,
-  sendOptionsHandler,
-  sendToChatHandler,
-  toggleLabelHandler,
-} from "./server/board";
+} from "./server/settings/settings";
 import {
   approvePullRequest,
   listLabels,

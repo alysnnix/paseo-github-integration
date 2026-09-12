@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to `github-board`. The other plugins in this repository version separately.
+Notable changes to this plugin.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Nothing here is published to a
@@ -8,6 +8,39 @@ registry: `paseo plugin add` follows a branch unless you pin `--ref <tag>`, so a
 pin and a line to read before you move.
 
 ## [Unreleased]
+
+### Changed
+
+- **The plugin is now its own repository, and its id is `github-integration`.** It used to be one
+  folder of a fork carrying two other people's plugins, one of which only ran on macOS. The
+  repository root is now the plugin root, so `paseo plugin add alysnnix/paseo-github-integration`
+  needs no path suffix. Your saved login and launch defaults are read from the old
+  `plugins/github-board/settings.json` when the new path has none, so the rename costs you nothing;
+  the filters, watched owners and prompt templates live in Paseo's own settings store and were
+  never affected. A Nix install must point at the new attribute and the new config key.
+- **The two files that were the whole plugin are now feature modules.** `client/board.tsx` (5146
+  lines) and `server/board.ts` (2410) became `client/{board,detail,launch,projects,settings,theme,
+  lib}` and `server/{github,board,items,projects,cache}`, with nothing over 400 lines. Nothing a
+  user sees changed.
+- **One cache instead of nine.** The five module globals on the daemon and the four in the app are
+  gone. The daemon has a single cache with a TTL per entry, single-flight so two clients asking at
+  once cost one sweep, and persistence to disk so a plugin reload or a daemon restart no longer
+  re-sweeps GitHub from scratch. The app uses the query cache Paseo already owns. Both mattered for
+  the same reason: the surface unmounts on every workspace switch, and the old design spent GitHub
+  rate limit re-answering questions it had just answered.
+- **The GraphQL budget is now watched.** Every query asks GitHub what it cost and what is left, the
+  cost is logged, and a sweep is refused with the reset time when the remaining budget falls below
+  a floor, instead of failing with GitHub's own error at the worst moment.
+
+### Internal
+
+- Tests (vitest) over the logic that is pure: search parsing, the orderings, prompt templates, the
+  relation merge, and the cache. CI runs typecheck, lint, tests and the Nix build.
+- The project's own rules are enforced by zero-dependency scripts rather than a linter plugin tree:
+  400 code lines per file, no duplicated function bodies, the SDK import boundaries, and version
+  agreement across `package.json`, `nix/plugin.nix` and this file.
+- Releases are cut from a signed tag, with notes taken verbatim from this file, a `SHA256SUMS`
+  beside the tarball, and GitHub build provenance to verify with `gh attestation verify`.
 
 ### Added
 

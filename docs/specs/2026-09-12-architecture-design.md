@@ -108,9 +108,9 @@ caches. Each RPC gets a query key and an explicit `staleTime`, so two open surfa
 share one request, and the "stale board stays on screen while the refresh runs" behaviour that
 `cachedBoard` implements by hand becomes the library's default.
 
-## Testing
+## Testing, linting and release
 
-vitest, matching the convention the sibling plugins already used, over the logic that is pure:
+vitest over the logic that is pure:
 
 - search parsing and matching, including the `/`, `#` and `@` sigils and separator normalisation;
 - the sort comparators, including the missing-date fallback;
@@ -122,7 +122,31 @@ Server handlers become testable without the network by taking their `gh` executo
 dependency, with a fake in tests. Client rendering stays verified by a human opening the surface;
 there is no RN harness here and inventing one is out of scope.
 
-CI runs typecheck, vitest and `nix build` on push and pull request.
+The project's own rules are enforced by small zero-dependency Node scripts under `scripts/`, not by
+a plugin tree: no source file over 400 code lines, no duplicated function bodies, the SDK import
+boundaries the compiler cannot see (`client` never imports `server`, `shared` imports neither Node
+nor React, browser globals only in `client/web.ts`), and agreement between the version in
+`package.json`, in `nix/plugin.nix` and in the CHANGELOG heading. A general linter is adopted only
+if it is a single self-contained binary; the ESLint plus typescript-eslint plus sonarjs plus jscpd
+stack would add hundreds of transitive packages to enforce four rules, and is rejected on supply
+chain grounds. Runtime dependencies stay at exactly one, `@getpaseo/plugin`, which the host
+supplies anyway.
+
+CI runs typecheck, lint, vitest and `nix build` on push and pull request.
+
+A release is cut by pushing a **signed** tag. The release workflow refuses an unsigned one, checks
+the tag against the `package.json` version, takes the release notes verbatim from the CHANGELOG
+section rather than generating them from commits, publishes a source tarball of exactly what the
+plugin ships alongside `SHA256SUMS`, and attests it with GitHub's build provenance so anyone can
+run `gh attestation verify` against the repository. No signing key is stored: the attestation uses
+the workflow's OIDC identity, and the tag carries the maintainer's own SSH signature.
+
+## Documentation
+
+`README.md` and `CLAUDE.md` still describe four side-by-side columns and a dual `author:`/`user:`
+search, which the relation sweep replaced two sessions ago. Both are rewritten against the current
+behaviour. The previous author's screenshots are removed and replaced with fresh captures of this
+board, and the README credits `gpambrozio/paseo-plugins` as the fork this started from.
 
 ## Non-goals
 
