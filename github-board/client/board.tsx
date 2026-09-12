@@ -178,6 +178,80 @@ function isRelation(value: string): value is Relation {
 }
 
 /**
+ * The board's sort orders, in the order the dropdown lists them. Each entry
+ * names the field a row is ranked by, newest first; `modes` restricts an
+ * entry the same way `RELATION_FILTERS` restricts a chip — `lastCommitAt` is
+ * null on anything that is not a pull request, so "Last commit" would sort a
+ * whole list to the bottom with no way to tell why.
+ */
+type SortOrder = {
+  id: string;
+  label: string;
+  modes?: readonly BoardMode[];
+  date: (item: BoardItem) => string | null;
+  /**
+   * The verb the card's meta line uses for this ordering's date. A list
+   * ordered by one date while every row reports another reads as unsorted, so
+   * the row follows the ordering rather than always saying "updated".
+   */
+  rowLabel: string;
+};
+
+/**
+ * "Recently updated" on its own name, not just `SORT_ORDERS[0]`: every mode
+ * offers it, so it doubles as the safe fallback wherever a lookup by id
+ * cannot fail in practice but `noUncheckedIndexedAccess` still asks for one.
+ */
+const DEFAULT_SORT_ORDER: SortOrder = {
+  id: "updated",
+  label: "Recently updated",
+  date: (item) => item.updatedAt,
+  rowLabel: "updated",
+};
+
+const SORT_ORDERS: readonly SortOrder[] = [
+  DEFAULT_SORT_ORDER,
+  {
+    id: "created",
+    label: "Recently created",
+    date: (item) => item.createdAt,
+    rowLabel: "opened",
+  },
+  {
+    id: "commit",
+    label: "Last commit",
+    modes: ["pull-requests"],
+    date: (item) => item.lastCommitAt,
+    rowLabel: "committed",
+  },
+];
+
+/** Whether a saved or freshly-picked string is one of the orderings this build knows. */
+function isSortId(value: string): value is (typeof SORT_ORDERS)[number]["id"] {
+  return SORT_ORDERS.some((order) => order.id === value);
+}
+
+/**
+ * Ranks two rows by one ordering's date, newest first. A row missing that
+ * date — an empty `updatedAt`/`createdAt` should not happen, but a null
+ * `lastCommitAt` does on plenty of pull requests — sorts to the end no matter
+ * which side of the comparison it lands on, so it never reads as "oldest"
+ * and jumps to the top of a descending list.
+ */
+function compareBySortDate(
+  order: (typeof SORT_ORDERS)[number],
+  a: BoardRow,
+  b: BoardRow,
+): number {
+  const left = order.date(a.item);
+  const right = order.date(b.item);
+  if (left === null || left === "") return right === null || right === "" ? 0 : 1;
+  if (right === null || right === "") return -1;
+  if (left === right) return 0;
+  return left < right ? 1 : -1;
+}
+
+/**
  * The owners the last completed load actually swept. Module scope for the
  * same reason `cachedBoard` is: a settings change that widens or narrows the
  * sweep has to be noticed even when the cached board is still "fresh" by
@@ -1612,6 +1686,69 @@ function RelationFilterBar({
 }
 
 /**
+ * The ordering dropdown, styled like `OwnerFilter` and `RepoFilter` so the
+ * three read as one row of controls. Unlike those two there is nothing to
+ * search — three rows fit in the popover without one — and nothing to
+ * multi-select, so a row carries a tick rather than a checkbox.
+ */
+function SortFilter({
+  orders,
+  active,
+  open,
+  styles,
+  onToggleOpen,
+  onSelect,
+}: {
+  orders: typeof SORT_ORDERS;
+  active: string;
+  open: boolean;
+  styles: Styles;
+  onToggleOpen: () => void;
+  onSelect: (id: string) => void;
+}) {
+  const current = orders.find((order) => order.id === active) ?? DEFAULT_SORT_ORDER;
+  return (
+    <View style={styles.filterAnchor}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Sort: ${current.label}`}
+        accessibilityState={{ expanded: open }}
+        style={styles.ghostButton}
+        onPress={onToggleOpen}
+      >
+        <Text style={styles.ghostButtonLabel}>{current.label} ▾</Text>
+      </Pressable>
+      {open ? (
+        <View style={styles.dropdown}>
+          <View style={styles.dropdownList}>
+            {orders.map((order) => {
+              const selected = order.id === current.id;
+              return (
+                <Pressable
+                  key={order.id}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  onPress={() => onSelect(order.id)}
+                  style={({ pressed }) => [
+                    styles.dropdownRow,
+                    pressed ? styles.cardPressed : null,
+                  ]}
+                >
+                  <Text style={styles.dropdownLabel} numberOfLines={1}>
+                    {order.label}
+                  </Text>
+                  {selected ? <Text style={styles.popoverTick}>✓</Text> : null}
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
  * The repository is spelled out only when the issue lives somewhere other than
  * the pull request; within one repository the number alone is how GitHub itself
  * reads.
@@ -1876,6 +2013,7 @@ const ItemRow = memo(function ItemRow({
   onSend,
   onLabels,
   type,
+  order,
 }: {
   item: BoardItem;
   /** The login the board was queried for, so a row of someone else's reads as one. */
@@ -1902,7 +2040,17 @@ const ItemRow = memo(function ItemRow({
   onLabels: ((item: BoardItem, point: { x: number; y: number }) => void) | null;
   /** Chooses the prompt template, the state glyph, and the Draft pill. */
   type: ColumnId;
+  /** The active ordering, so the meta line reports the date the list is sorted on. */
+  order: SortOrder;
 }) {
+  /**
+   * A row with no date for the active ordering — a pull request GitHub reports
+   * no commit for — still has to say something, and `updatedAt` is the one
+   * date every card carries.
+   */
+  const stamp = order.date(item);
+  const stampLabel = stamp === null || stamp === "" ? "updated" : order.rowLabel;
+  const stampDate = stamp === null || stamp === "" ? item.updatedAt : stamp;
   /** Nothing hovers on a touch platform, and the action would hide forever. */
   const isWeb = platform === "web";
   /**
@@ -2042,7 +2190,7 @@ const ItemRow = memo(function ItemRow({
           {type === "draft-prs" ? <Text style={styles.itemRowDraftPill}>Draft</Text> : null}
         </View>
         <Text style={styles.itemRowMeta} numberOfLines={1}>
-          {item.repository} #{item.number} · updated {relativeTime(item.updatedAt)}
+          {item.repository} #{item.number} · {stampLabel} {relativeTime(stampDate)}
           {byline !== null ? ` by ${byline}` : ""}
         </Text>
         {compact ? <View style={styles.itemRowTrailingCompact}>{trailing}</View> : null}
@@ -3968,6 +4116,7 @@ export function GitHubBoard(props: PluginSurfaceProps) {
   const savedHidden = display.status === "ready" ? display.values.hiddenRepositories : null;
   const savedFraction = display.status === "ready" ? display.values.detailWidthFraction : null;
   const savedRelation = display.status === "ready" ? display.values.relation : null;
+  const savedSort = display.status === "ready" ? display.values.sort : null;
   /**
    * The organisations and users to sweep beyond the viewer's own buckets, read
    * fresh every render and mirrored onto a ref: `refresh` needs the *latest*
@@ -4073,10 +4222,12 @@ export function GitHubBoard(props: PluginSurfaceProps) {
   const [hiddenRepos, setHiddenRepos] = useState<ReadonlySet<string>>(() => new Set());
   /** Owners hidden from the current view. Not persisted: only the relation filter is. */
   const [hiddenOwners, setHiddenOwners] = useState<ReadonlySet<string>>(() => new Set());
-  /** Which of the two dropdowns is open; never both at once, so one backdrop closes either. */
-  const [openFilter, setOpenFilter] = useState<"repo" | "owner" | null>(null);
+  /** Which of the three dropdowns is open; never more than one at once, so one backdrop closes any of them. */
+  const [openFilter, setOpenFilter] = useState<"repo" | "owner" | "sort" | null>(null);
   /** The last relation chip picked, hydrated from and persisted to `displaySettings`. */
   const [relationFilter, setRelationFilter] = useState<string>("all");
+  /** The last ordering picked, hydrated from and persisted to `displaySettings`. */
+  const [sortOrder, setSortOrder] = useState<string>("updated");
   const [searchQuery, setSearchQuery] = useState("");
   /**
    * Which of the four modes fills the body. Not persisted — the user picks it
@@ -4147,6 +4298,14 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     relationHydrated.current = true;
     setRelationFilter(savedRelation === "all" || isRelation(savedRelation) ? savedRelation : "all");
   }, [savedRelation]);
+
+  /** Same one-shot adoption again, for the ordering; an id this build does not know falls back to "updated". */
+  const sortHydrated = useRef(false);
+  useEffect(() => {
+    if (sortHydrated.current || savedSort === null) return;
+    sortHydrated.current = true;
+    setSortOrder(isSortId(savedSort) ? savedSort : "updated");
+  }, [savedSort]);
 
   /**
    * Async **function expressions**, never async arrows, anywhere in the client
@@ -4316,6 +4475,20 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     ? relationFilter
     : "all";
 
+  /**
+   * The orderings this mode has any use for, and the one actually applied. A
+   * saved ordering the mode does not offer falls back to "Recently updated"
+   * here rather than being overwritten, the same way `effectiveRelation`
+   * spares a relation the current mode cannot honour.
+   */
+  const visibleSortOrders = useMemo(
+    () => SORT_ORDERS.filter((order) => order.modes?.includes(mode) ?? true),
+    [mode],
+  );
+  const effectiveSort = visibleSortOrders.some((order) => order.id === sortOrder)
+    ? sortOrder
+    : "updated";
+
   /** How many rows each relation chip would show, from the active mode's rows before that chip is applied. */
   const relationCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -4362,12 +4535,23 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     return relationFiltered.filter((row) => !hiddenOwners.has(row.item.owner));
   }, [relationFiltered, hiddenOwners]);
 
-  /** Relation, then owner, then repository (already applied in `filteredColumns`), then this search. */
+  /** Relation, then owner, then repository (already applied in `filteredColumns`), then this search, then the chosen ordering. */
   const searchTerms = useMemo(() => parseSearchQuery(searchQuery), [searchQuery]);
-  const displayRows = useMemo(() => {
+  const searchedRows = useMemo(() => {
     if (searchTerms.length === 0) return ownerFiltered;
     return ownerFiltered.filter((row) => matchesSearchTerms(row.item, searchTerms));
   }, [ownerFiltered, searchTerms]);
+  /** The ordering object behind `effectiveSort`, shared by the sort and by every row's meta line. */
+  const activeOrder = useMemo(
+    () => SORT_ORDERS.find((candidate) => candidate.id === effectiveSort) ?? DEFAULT_SORT_ORDER,
+    [effectiveSort],
+  );
+  const displayRows = useMemo(() => {
+    // A copy: `searchedRows` is memoised and every filter above it relies on
+    // that identity staying stable, so sorting has to run on a fresh array
+    // rather than the shared one in place.
+    return [...searchedRows].sort((a, b) => compareBySortDate(activeOrder, a, b));
+  }, [searchedRows, activeOrder]);
 
   const selectColumnMode = useCallback((id: BoardMode) => setMode(id), []);
 
@@ -4395,6 +4579,17 @@ export function GitHubBoard(props: PluginSurfaceProps) {
       if (display.status !== "ready") return;
       void display.save({ ...display.values, relation: next }, display.revision).then((saved) => {
         if (!saved) setError(`Relation filter could not be saved: ${display.saveError ?? ""}`);
+      });
+    },
+    [display],
+  );
+
+  const commitSort = useCallback(
+    (next: string) => {
+      setSortOrder(next);
+      if (display.status !== "ready") return;
+      void display.save({ ...display.values, sort: next }, display.revision).then((saved) => {
+        if (!saved) setError(`Sort order could not be saved: ${display.saveError ?? ""}`);
       });
     },
     [display],
@@ -4628,6 +4823,7 @@ export function GitHubBoard(props: PluginSurfaceProps) {
         onSend={openSendDialog}
         onLabels={row.type === "discussions" ? null : openLabelMenu}
         type={row.type}
+        order={activeOrder}
       />
     ),
     [
@@ -4641,6 +4837,7 @@ export function GitHubBoard(props: PluginSurfaceProps) {
       openDetails,
       openSendDialog,
       openLabelMenu,
+      activeOrder,
     ],
   );
 
@@ -4767,6 +4964,17 @@ export function GitHubBoard(props: PluginSurfaceProps) {
               onSelectNone={selectNoRepos}
             />
           ) : null}
+          <SortFilter
+            orders={visibleSortOrders}
+            active={effectiveSort}
+            open={openFilter === "sort"}
+            styles={styles}
+            onToggleOpen={() => setOpenFilter((current) => (current === "sort" ? null : "sort"))}
+            onSelect={(id) => {
+              commitSort(id);
+              setOpenFilter(null);
+            }}
+          />
           <TextInput
             accessibilityLabel="Search: a plain word matches title, repository or number; /name a repository, #123 a number, @login an author"
             style={styles.searchInput}

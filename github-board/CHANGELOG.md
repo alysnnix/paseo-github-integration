@@ -48,6 +48,14 @@ pin and a line to read before you move.
   repository". Separators are ignored on both sides, which is what was breaking before:
   `checkout frontend` and `octo-org/` both find `octo-org/checkout-frontend`, where a
   literal match found nothing unless the hyphens were typed exactly.
+- **Three orderings, beside the filters.** The list was always newest-updated first, which a
+  comment is enough to disturb. **Recently created** orders by the date the issue or pull
+  request was opened, and **Last commit** by the head commit's date, which is the one that
+  answers "what has actually moved". Each card's date follows the ordering — *opened*,
+  *committed*, *updated* — so the order a list is in is readable from the rows themselves,
+  and a pull request GitHub reports no commit for falls back to its update date and sorts
+  last instead of to the top. **Last commit** is offered on pull requests only, since nothing
+  else has commits, and the choice is remembered between sessions.
 
 ## [0.5.0] — 2026-09-08
 

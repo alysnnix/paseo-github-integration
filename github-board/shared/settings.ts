@@ -59,6 +59,14 @@ export const displaySettings = defineSettings({
     watchedOwners: z.array(z.string()).default([]),
     /** The last filter the board was left on, so a remount reopens on it. */
     relation: z.string().default("all"),
+    /**
+     * The last ordering the board was left on: one of `"updated"`,
+     * `"created"`, or `"commit"`. A string rather than an enum for the same
+     * reason as `relation` — a document saved by a newer build must still
+     * parse here, and an id this build does not know falls back to the
+     * default ordering on read.
+     */
+    sort: z.string().default("updated"),
   }),
 });
 

@@ -65,6 +65,15 @@ export const BoardItemSchema = z.object({
   /** `owner/name`, the only repository form the board displays. */
   repository: z.string(),
   updatedAt: z.string(),
+  /** When it was opened, for the "Recently created" ordering. */
+  createdAt: z.string(),
+  /**
+   * The head commit's date, for the "Last commit" ordering. Null on anything
+   * that is not a pull request, and on a pull request GitHub reports no commit
+   * for — the ordering sends those to the end rather than guessing a date from
+   * `updatedAt`, which moves on a comment and would lie about the branch.
+   */
+  lastCommitAt: z.string().nullable(),
   commentsCount: z.number().int(),
   labels: z.array(z.string()),
   /**

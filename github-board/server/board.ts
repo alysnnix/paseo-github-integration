@@ -296,13 +296,14 @@ interface GhSearchNode {
   title?: unknown;
   url?: unknown;
   updatedAt?: unknown;
+  createdAt?: unknown;
   author?: { login?: unknown };
   comments?: { totalCount?: unknown };
   labels?: { nodes?: unknown };
   repository?: { nameWithOwner?: unknown; isArchived?: unknown };
 }
 
-function toItem(node: GhSearchNode, detail: string | null): BoardItem {
+function toItem(node: GhSearchNode, detail: string | null, lastCommitAt: string | null = null): BoardItem {
   const labels = labelNodeNames(node.labels?.nodes);
   const comments = node.comments?.totalCount;
   const repository =
@@ -315,6 +316,10 @@ function toItem(node: GhSearchNode, detail: string | null): BoardItem {
     url: typeof node.url === "string" ? node.url : "",
     repository,
     updatedAt: typeof node.updatedAt === "string" ? node.updatedAt : "",
+    createdAt: typeof node.createdAt === "string" ? node.createdAt : "",
+    // Null on anything that is not a pull request, or a pull request GitHub
+    // reports no head commit for; only fetchPullRequests' mapper passes one in.
+    lastCommitAt,
     commentsCount: typeof comments === "number" ? comments : 0,
     labels,
     // Null rather than empty for a deleted account, which GitHub returns as no
@@ -552,6 +557,7 @@ const ISSUE_SELECTION = `... on Issue {
   title
   url
   updatedAt
+  createdAt
   author { login }
   comments { totalCount }
   labels(first: 20) { nodes { name } }
@@ -586,6 +592,7 @@ const PULL_REQUEST_SELECTION = `... on PullRequest {
   title
   url
   updatedAt
+  createdAt
   isDraft
   author { login }
   comments { totalCount }
@@ -594,11 +601,15 @@ const PULL_REQUEST_SELECTION = `... on PullRequest {
   closingIssuesReferences(first: 20) {
     nodes { id number repository { nameWithOwner } }
   }
+  commits(last: 1) {
+    nodes { commit { committedDate } }
+  }
 }`;
 
 interface GhPullRequestNode extends GhSearchNode {
   isDraft?: unknown;
   closingIssuesReferences?: { nodes?: unknown };
+  commits?: { nodes?: unknown };
 }
 
 function toLinkedIssues(node: GhPullRequestNode): LinkedIssue[] {
@@ -616,6 +627,18 @@ function toLinkedIssues(node: GhPullRequestNode): LinkedIssue[] {
           : "",
     }))
     .filter((issue) => issue.id !== "");
+}
+
+/**
+ * The head commit's date, from the single `commits(last: 1)` node requested
+ * on every pull request. Null when GitHub reports no commit at all, which
+ * happens on a pull request whose branch was force-pushed away underneath it.
+ */
+function toLastCommitAt(node: GhPullRequestNode): string | null {
+  const nodes = node.commits?.nodes;
+  if (!Array.isArray(nodes) || nodes.length === 0) return null;
+  const commit = (nodes[0] as { commit?: { committedDate?: unknown } } | undefined)?.commit;
+  return typeof commit?.committedDate === "string" ? commit.committedDate : null;
 }
 
 /**
@@ -863,7 +886,7 @@ async function fetchPullRequests(
     (row) => {
       const id = typeof row.id === "string" ? row.id : String(row.url);
       if (row.isDraft === true) drafts.add(id);
-      return { ...toItem(row, null), linkedIssues: toLinkedIssues(row) };
+      return { ...toItem(row, null, toLastCommitAt(row)), linkedIssues: toLinkedIssues(row) };
     },
     limit,
   );
@@ -883,6 +906,7 @@ const DISCUSSION_SELECTION = `... on Discussion {
   title
   url
   updatedAt
+  createdAt
   author { login }
   category { name }
   comments { totalCount }
