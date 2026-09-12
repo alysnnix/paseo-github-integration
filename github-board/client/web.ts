@@ -19,7 +19,32 @@ interface DesktopOpenerBridge {
   readonly opener?: { readonly openUrl?: (url: string) => Promise<void> };
 }
 
+/**
+ * What a link out of a card is allowed to be. Every URL here was written by
+ * whoever wrote the issue, the pull request or the comment, and both openers
+ * below hand it somewhere with more authority than a text view: `window.open`
+ * on the web, the OS handler on the desktop. `javascript:` runs, `file:`
+ * reads the daemon machine, and a registered app scheme launches an
+ * application, so the opener takes an allowlist rather than a denylist.
+ */
+const OPENABLE_PROTOCOLS: Record<string, true> = {
+  "https:": true,
+  "http:": true,
+  "mailto:": true,
+};
+
 export function openExternalUrl(url: string): void {
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    console.warn("[github-board] refused to open a URL that does not parse");
+    return;
+  }
+  if (OPENABLE_PROTOCOLS[protocol] !== true) {
+    console.warn(`[github-board] refused to open a ${protocol} URL`);
+    return;
+  }
   const openUrl = (globalThis as { paseoDesktop?: DesktopOpenerBridge }).paseoDesktop?.opener
     ?.openUrl;
   if (typeof openUrl !== "function") {

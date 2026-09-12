@@ -11,9 +11,23 @@
  * could have written is a fetch nobody asked for.
  */
 export function isGitHubImageHost(url: string): boolean {
-  const match = /^https:\/\/([^/?#]+)/i.exec(url);
-  if (match === null) return false;
-  const host = (match[1] ?? "").toLowerCase();
-  return host === "github.com" || host.endsWith(".githubusercontent.com");
+  // Parsed, never matched. A regex over the raw string decides on different
+  // text than `fetch` does: WHATWG ends the host at a backslash too, so
+  // `https://evil.example\.githubusercontent.com/a.png` reads as the
+  // attacker's host to `fetch` and as a GitHub subdomain to a pattern, which
+  // is the daemon handing `gh auth token` to whoever wrote the comment.
+  let host: URL;
+  try {
+    host = new URL(url);
+  } catch {
+    return false;
+  }
+  if (host.protocol !== "https:") return false;
+  // Credentials in the URL are refused rather than parsed around: they carry
+  // no meaning for a GitHub attachment and they are the other half of every
+  // host-confusion trick.
+  if (host.username !== "" || host.password !== "") return false;
+  const name = host.hostname.toLowerCase();
+  return name === "github.com" || name.endsWith(".githubusercontent.com");
 }
 

@@ -111,6 +111,18 @@ export const listJobs = defineRpc({
   }),
 });
 
+/**
+ * A job id is a file stem: it becomes `<id>.plist`, `<id>.log` and
+ * `<id>.jsonl` under the plugin's directory. `slugify` produces one when the
+ * job is created, but an id also arrives back over RPC, and a plain string
+ * there is a path: `../../../../var/log/system` would read and unlink outside
+ * the plugin. The shape is the same one `slugify` emits, enforced at the
+ * boundary every handler shares.
+ */
+export const JobIdSchema = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "A job id is lowercase letters, digits and hyphens.");
+
 export const createJob = defineRpc({
   name: "jobs.create",
   input: JobSpecSchema,
@@ -119,31 +131,31 @@ export const createJob = defineRpc({
 
 export const updateJob = defineRpc({
   name: "jobs.update",
-  input: z.object({ id: z.string(), spec: JobSpecSchema }),
+  input: z.object({ id: JobIdSchema, spec: JobSpecSchema }),
   output: JobSchema,
 });
 
 export const deleteJob = defineRpc({
   name: "jobs.delete",
-  input: z.object({ id: z.string() }),
+  input: z.object({ id: JobIdSchema }),
   output: z.object({}),
 });
 
 export const runJob = defineRpc({
   name: "jobs.run",
-  input: z.object({ id: z.string() }),
+  input: z.object({ id: JobIdSchema }),
   output: z.object({}),
 });
 
 export const setJobEnabled = defineRpc({
   name: "jobs.set-enabled",
-  input: z.object({ id: z.string(), enabled: z.boolean() }),
+  input: z.object({ id: JobIdSchema, enabled: z.boolean() }),
   output: JobSchema,
 });
 
 export const readJobLog = defineRpc({
   name: "jobs.log",
-  input: z.object({ id: z.string() }),
+  input: z.object({ id: JobIdSchema }),
   output: z.object({
     text: z.string(),
     /** The file was longer than the tail that came back. */

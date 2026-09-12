@@ -61,11 +61,22 @@ const NAMED_ENTITIES: Record<string, string> = {
 export function decodeEntities(text: string): string {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body: string) => {
     if (body.startsWith("#x") || body.startsWith("#X")) {
-      return String.fromCodePoint(parseInt(body.slice(2), 16));
+      return codePoint(parseInt(body.slice(2), 16), entity);
     }
-    if (body.startsWith("#")) return String.fromCodePoint(parseInt(body.slice(1), 10));
+    if (body.startsWith("#")) return codePoint(parseInt(body.slice(1), 10), entity);
     return NAMED_ENTITIES[body.toLowerCase()] ?? entity;
   });
+}
+
+/**
+ * `String.fromCodePoint` throws a RangeError above U+10FFFF, and a body is
+ * decoded while the detail panel renders, so `&#x110000;` in a comment anyone
+ * can write would take the whole surface down with it. Out of range is not a
+ * character, so it stays the text the author wrote.
+ */
+function codePoint(value: number, entity: string): string {
+  if (!Number.isInteger(value) || value < 0 || value > 0x10ffff) return entity;
+  return String.fromCodePoint(value);
 }
 
 function attribute(attributes: string, name: string): string | null {
