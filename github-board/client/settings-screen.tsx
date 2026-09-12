@@ -13,17 +13,38 @@
  */
 import { type PluginSurfaceProps, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
-import { useCallback, useMemo, useState } from "react";
+import {
+  SettingsAction,
+  SettingsInput,
+  type SettingsInputHandle,
+  SettingsRow,
+  SettingsSection,
+} from "@getpaseo/plugin/client/ui";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
 
 import type { PromptSettings } from "../shared/board";
 import { saveLogin } from "../shared/board";
-import { normalizePrompts, promptSettings } from "../shared/settings";
+import { displaySettings, normalizePrompts, promptSettings } from "../shared/settings";
 import { EMPTY_PROMPTS, PromptSettingsView, useStyles } from "./board";
+
+/**
+ * Strips what a pasted `@owner` or stray whitespace would otherwise turn into
+ * a broken search qualifier, and refuses blank input without treating it as
+ * an error — the empty string is just "nothing typed yet".
+ */
+function normalizeOwner(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const stripped = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  if (stripped === "" || /\s/.test(stripped)) return null;
+  return stripped;
+}
 
 export function BoardSettingsScreen(props: PluginSurfaceProps) {
   const styles = useStyles(props);
   const prompts = useSettings(promptSettings);
+  const display = useSettings(displaySettings);
   const persistLogin = useRpc(saveLogin);
   const toast = useToast();
 
@@ -34,6 +55,11 @@ export function BoardSettingsScreen(props: PluginSurfaceProps) {
    */
   const [login, setLogin] = useState("");
   const [busy, setBusy] = useState(false);
+
+  /** The owner box's own draft, tracked only to know whether Add has anything to add. */
+  const [ownerDraft, setOwnerDraft] = useState("");
+  const ownerInputRef = useRef<SettingsInputHandle>(null);
+  const watchedOwners = display.status === "ready" ? display.values.watchedOwners : [];
 
   const applyLogin = useCallback(
     // Async function expression, not an async arrow — Hermes evaluates an async
@@ -65,19 +91,96 @@ export function BoardSettingsScreen(props: PluginSurfaceProps) {
     [prompts, toast],
   );
 
+  const addOwner = useCallback(
+    async function addOwner() {
+      if (display.status !== "ready") return;
+      const normalized = normalizeOwner(ownerDraft);
+      setOwnerDraft("");
+      ownerInputRef.current?.replaceText("");
+      if (normalized === null) return;
+      if (display.values.watchedOwners.some((owner) => owner.toLowerCase() === normalized.toLowerCase())) {
+        return;
+      }
+      const saved = await display.save(
+        { ...display.values, watchedOwners: [...display.values.watchedOwners, normalized] },
+        display.revision,
+      );
+      if (saved) toast.show(`Watching ${normalized}`, { variant: "success" });
+      else toast.error(display.saveError ?? "The owner was not saved.");
+    },
+    [display, ownerDraft, toast],
+  );
+
+  const removeOwner = useCallback(
+    async function removeOwner(owner: string) {
+      if (display.status !== "ready") return;
+      const saved = await display.save(
+        {
+          ...display.values,
+          watchedOwners: display.values.watchedOwners.filter((existing) => existing !== owner),
+        },
+        display.revision,
+      );
+      if (saved) toast.show(`Stopped watching ${owner}`, { variant: "success" });
+      else toast.error(display.saveError ?? "The owner was not removed.");
+    },
+    [display, toast],
+  );
+
   const screenStyle = useMemo(() => ({ flex: 1 }), []);
+  /**
+   * The owners section renders at its natural height above the prompt editor,
+   * which keeps its own internal `ScrollView` — nesting two scrolling views
+   * would fight each other's gestures, so this one gets the remaining space
+   * instead of its own scroll container.
+   */
+  const promptsWrapperStyle = useMemo(() => ({ flex: 1 }), []);
 
   return (
     <View style={screenStyle}>
-      <PromptSettingsView
-        styles={styles}
-        prompts={prompts.status === "ready" ? prompts.values : EMPTY_PROMPTS}
-        login={login}
-        busy={busy}
-        mutedColor={props.theme.colors.foregroundMuted}
-        onSave={applyPrompts}
-        onApplyLogin={applyLogin}
-      />
+      <SettingsSection
+        title="Watched owners"
+        info="GitHub search has no scope for everything, so the board sweeps these owners in addition to whatever has a relation to you."
+      >
+        <SettingsInput
+          ref={ownerInputRef}
+          label="New owner"
+          hint="Organization or user login"
+          placeholder="octocat"
+          onChangeText={setOwnerDraft}
+          disabled={display.status !== "ready"}
+        />
+        <SettingsAction
+          label="Add owner"
+          actionLabel="Add"
+          onPress={addOwner}
+          disabled={display.status !== "ready" || display.saving || normalizeOwner(ownerDraft) === null}
+        />
+        {watchedOwners.length === 0 ? (
+          <SettingsRow label="No watched owners yet" />
+        ) : (
+          watchedOwners.map((owner) => (
+            <SettingsAction
+              key={owner}
+              label={owner}
+              actionLabel="Remove"
+              onPress={() => removeOwner(owner)}
+              disabled={display.saving}
+            />
+          ))
+        )}
+      </SettingsSection>
+      <View style={promptsWrapperStyle}>
+        <PromptSettingsView
+          styles={styles}
+          prompts={prompts.status === "ready" ? prompts.values : EMPTY_PROMPTS}
+          login={login}
+          busy={busy}
+          mutedColor={props.theme.colors.foregroundMuted}
+          onSave={applyPrompts}
+          onApplyLogin={applyLogin}
+        />
+      </View>
     </View>
   );
 }

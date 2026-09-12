@@ -6,11 +6,12 @@ import {
   TextInput as SheetTextInput,
   useToast,
 } from "@getpaseo/plugin/client/react-native";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
   Easing,
+  FlatList,
   Image,
   Keyboard,
   Linking,
@@ -40,10 +41,12 @@ import type {
   ProjectRef,
   PromptSet,
   PromptSettings,
+  Relation,
   RepositoryLabel,
 } from "../shared/board";
 import {
   COLUMN_IDS,
+  RELATION_IDS,
   approvePullRequest,
   listLabels,
   loadBoard,
@@ -60,6 +63,7 @@ import {
 } from "../shared/board";
 import { isGitHubImageHost } from "../shared/image-host";
 import { MarkdownBody } from "./markdown";
+import { ProjectsView } from "./projects";
 import {
   completePrompts,
   displaySettings,
@@ -135,11 +139,51 @@ let cachedFetchedAt = 0;
  */
 let legacyMigrationAttempted = false;
 /**
- * Which column the compact layout is showing. Module scope for the same reason
- * the board is: the surface unmounts on every workspace switch, and coming back
- * to Issues after deliberately choosing Open PRs reads as the board forgetting.
+ * The four ways the board can be viewed, one at a time, in the order the
+ * switcher shows them. Replaces the four columns that used to sit side by
+ * side: a phone never had room for all of them, and on a wide window the
+ * chosen mode is now the same single control either way.
  */
-let cachedColumnId: ColumnId = COLUMN_IDS[0];
+const BOARD_MODES = [
+  { id: "pull-requests", label: "Pull requests" },
+  { id: "issues", label: "Issues" },
+  { id: "discussions", label: "Discussions" },
+  { id: "projects", label: "Projects" },
+] as const;
+
+type BoardMode = (typeof BOARD_MODES)[number]["id"];
+
+/**
+ * The relation filter chips, in the order the filter bar shows them. `"all"`
+ * is not a `Relation` GitHub reports — it means "every relation" — so it is
+ * spelled out here rather than folded into `RELATION_IDS`.
+ *
+ * `modes` is the set of switcher modes a chip means anything in: GitHub only
+ * requests review on a pull request, so the chip is dead weight on the issues
+ * and discussions lists, where it would read as a permanent zero and, once
+ * picked, empty the list with no way to tell why.
+ */
+const RELATION_FILTERS: readonly { id: string; label: string; modes?: readonly BoardMode[] }[] = [
+  { id: "all", label: "All" },
+  { id: "review-requested", label: "Needs my review", modes: ["pull-requests"] },
+  { id: "mentioned", label: "Mentions me" },
+  { id: "assigned", label: "Assigned to me" },
+  { id: "author", label: "Mine" },
+  { id: "owned", label: "Other" },
+];
+
+/** Whether a saved or freshly-picked string is one of the relations GitHub reports. */
+function isRelation(value: string): value is Relation {
+  return (RELATION_IDS as readonly string[]).includes(value);
+}
+
+/**
+ * The owners the last completed load actually swept. Module scope for the
+ * same reason `cachedBoard` is: a settings change that widens or narrows the
+ * sweep has to be noticed even when the cached board is still "fresh" by
+ * `STALE_AFTER_MS` and would otherwise not refetch on remount.
+ */
+let cachedOwners: readonly string[] = [];
 /**
  * Each repository's label catalogue, by `owner/name`. A label set changes far
  * more slowly than the work it is put on, and the menu is reopened card after
@@ -336,7 +380,12 @@ export function useStyles({ theme, layout }: PluginSurfaceProps) {
         lineHeight: 12,
         fontWeight: "700" as const,
       },
-      dropdownLabel: { color: colors.foreground, fontSize: layout.compact ? 14 : 12 },
+      dropdownLabel: {
+        flex: 1,
+        minWidth: 0,
+        color: colors.foreground,
+        fontSize: layout.compact ? 14 : 12,
+      },
       backdrop: {
         position: "absolute" as const,
         top: 0,
@@ -1081,11 +1130,151 @@ export function useStyles({ theme, layout }: PluginSurfaceProps) {
       },
       /** Larger than the text it leads, or the caret reads as a bullet. */
       mdDetailsMarker: { color: colors.foreground, fontSize: 20, lineHeight: 21, minWidth: 14 },
+
+      // --- Mode switcher, filter bar, and the GitHub-style row list ---
+      /** The segmented control choosing which of the four modes fills the body. */
+      modeBar: {
+        flexDirection: "row" as const,
+        flexWrap: "wrap" as const,
+        gap: 8,
+        paddingHorizontal: layout.compact ? 12 : 20,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: separator,
+      },
+      modeButton: {
+        borderWidth: 1,
+        borderColor: separator,
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: layout.compact ? 8 : 6,
+      },
+      modeButtonActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+      modeButtonLabel: { color: colors.foreground, fontSize: 13, fontWeight: "600" as const },
+      modeButtonLabelActive: { color: colors.accentForeground },
+      /**
+       * The relation chips, the owner and repository dropdowns, and the free-text
+       * search all live in one wrapping row: `zIndex` keeps a dropdown opened from
+       * here above the body underneath it, the same way the header already
+       * out-stacks the columns for the repository filter.
+       */
+      filterBar: {
+        flexDirection: "row" as const,
+        flexWrap: "wrap" as const,
+        alignItems: "center" as const,
+        gap: 8,
+        paddingHorizontal: layout.compact ? 12 : 20,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: separator,
+        zIndex: 25,
+      },
+      relationRow: {
+        flexDirection: "row" as const,
+        flexWrap: "wrap" as const,
+        alignItems: "center" as const,
+        gap: 6,
+      },
+      relationChip: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 4,
+        borderWidth: 1,
+        borderColor: separator,
+        borderRadius: 14,
+        paddingHorizontal: 10,
+        paddingVertical: layout.compact ? 6 : 4,
+      },
+      relationChipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+      relationChipLabel: { color: colors.foreground, fontSize: 12 },
+      relationChipLabelActive: { color: colors.accentForeground },
+      relationChipCount: { color: colors.foregroundMuted, fontSize: 11 },
+      /** The owner dropdown's per-row count; the repository dropdown has none. */
+      dropdownCount: { color: colors.foregroundMuted, fontSize: 11 },
+      searchInput: {
+        flexGrow: 1,
+        minWidth: layout.compact ? 140 : 180,
+        color: colors.foreground,
+        borderWidth: 1,
+        borderColor: separator,
+        borderRadius: 6,
+        paddingHorizontal: 10,
+        paddingVertical: layout.compact ? 8 : 6,
+        fontSize: 13,
+      },
+      rowList: { flex: 1 },
+      rowListContent: { paddingBottom: layout.compact ? 32 : 8 },
+      /**
+       * One line of the GitHub-style list: an icon, the title and its meta, and
+       * — on the wide layout only — the trailing checks/comments/labels. A
+       * border under the row stands in for the card frame the grid used to draw.
+       */
+      itemRow: {
+        flexDirection: "row" as const,
+        alignItems: "flex-start" as const,
+        gap: layout.compact ? 10 : 12,
+        paddingHorizontal: layout.compact ? 12 : 16,
+        paddingVertical: layout.compact ? 12 : 10,
+        borderBottomWidth: 1,
+        borderBottomColor: separator,
+      },
+      itemRowPressed: { backgroundColor: withAlpha(colors.foregroundMuted, "1a") },
+      /** The row whose details are open, so the panel reads as *its* panel. */
+      itemRowSelected: { backgroundColor: withAlpha(colors.accent, "0d") },
+      itemRowIcon: { width: 20, alignItems: "center" as const, paddingTop: 2 },
+      itemRowMain: { flex: 1, minWidth: 0, gap: 2 },
+      itemRowTitleLine: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        flexWrap: "wrap" as const,
+        gap: 8,
+      },
+      itemRowTitle: {
+        flexShrink: 1,
+        color: colors.foreground,
+        fontSize: layout.compact ? 15 : 14,
+        fontWeight: "600" as const,
+      },
+      /** A pull request folded into the merged list, marked the way its own column used to name it. */
+      itemRowDraftPill: {
+        color: colors.foregroundMuted,
+        fontSize: 10,
+        fontWeight: "600" as const,
+        overflow: "hidden" as const,
+        borderWidth: 1,
+        borderColor: separator,
+        borderRadius: 8,
+        paddingHorizontal: 6,
+        paddingVertical: 1,
+      },
+      itemRowMeta: { color: colors.foregroundMuted, fontSize: 12 },
+      /** Checks, comment count and labels, wide layout only — compact wraps them under the title instead. */
+      itemRowTrailing: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8 },
+      itemRowTrailingCompact: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        flexWrap: "wrap" as const,
+        gap: 6,
+        marginTop: 6,
+      },
+      /** Hidden until the row or the action itself is hovered; see `sendButtonHidden`. */
+      itemRowActionHidden: { opacity: 0 },
     };
   }, [theme, layout.compact]);
 }
 
 type Styles = ReturnType<typeof useStyles>;
+
+/**
+ * Whether a repository matches a search query, against the full `owner/name`
+ * or the name alone — a search for "board" should find `getpaseo/github-board`
+ * without the owner typed first, the way GitHub's own repository picker does.
+ */
+function repositoryMatchesQuery(repository: string, query: string): boolean {
+  if (repository.toLowerCase().includes(query)) return true;
+  const slash = repository.indexOf("/");
+  return slash >= 0 && repository.slice(slash + 1).toLowerCase().includes(query);
+}
 
 /**
  * Repository filter. The selection is held as the set of *hidden* repositories
@@ -1115,6 +1304,17 @@ function RepoFilter({
 }) {
   const selected = repositories.filter((repository) => !hidden.has(repository)).length;
   const allSelected = selected === repositories.length;
+  const [query, setQuery] = useState("");
+  // The search stays behind when the dropdown closes, so reopening it does not
+  // silently keep a scoped-down list the user cannot see the reason for.
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleRepositories =
+    normalizedQuery === ""
+      ? repositories
+      : repositories.filter((repository) => repositoryMatchesQuery(repository, normalizedQuery));
 
   return (
     <View style={styles.filterAnchor}>
@@ -1139,29 +1339,196 @@ function RepoFilter({
               <Text style={styles.chipLabel}>None</Text>
             </Pressable>
           </View>
+          <TextInput
+            accessibilityLabel="Filter repositories by name"
+            style={styles.popoverSearch}
+            placeholder="Filter repositories…"
+            placeholderTextColor={styles.popoverEmpty.color}
+            value={query}
+            onChangeText={setQuery}
+            autoCorrect={false}
+          />
           <ScrollView contentContainerStyle={styles.dropdownList}>
-            {repositories.map((repository) => {
-              const checked = !hidden.has(repository);
-              return (
-                <Pressable
-                  key={repository}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{ checked }}
-                  onPress={() => onToggleRepo(repository)}
-                  style={({ pressed }) => [styles.dropdownRow, pressed ? styles.cardPressed : null]}
-                >
-                  <View style={[styles.checkbox, checked ? styles.checkboxChecked : null]}>
-                    {checked ? <Text style={styles.checkmark}>✓</Text> : null}
-                  </View>
-                  <Text style={styles.dropdownLabel} numberOfLines={1}>
-                    {repository}
-                  </Text>
-                </Pressable>
-              );
-            })}
+            {visibleRepositories.length === 0 ? (
+              <Text style={styles.popoverEmpty}>No repositories match.</Text>
+            ) : (
+              visibleRepositories.map((repository) => {
+                const checked = !hidden.has(repository);
+                return (
+                  <Pressable
+                    key={repository}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked }}
+                    onPress={() => onToggleRepo(repository)}
+                    style={({ pressed }) => [styles.dropdownRow, pressed ? styles.cardPressed : null]}
+                  >
+                    <View style={[styles.checkbox, checked ? styles.checkboxChecked : null]}>
+                      {checked ? <Text style={styles.checkmark}>✓</Text> : null}
+                    </View>
+                    <Text style={styles.dropdownLabel} numberOfLines={1}>
+                      {repository}
+                    </Text>
+                  </Pressable>
+                );
+              })
+            )}
           </ScrollView>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * Owner filter, alongside the repository one: the list of distinct owners on
+ * the board, each with how many items the current mode and relation filter
+ * would show for it. Shaped the same way `RepoFilter` is — a hidden set, an
+ * always-visible search box — so the two dropdowns read as one control.
+ */
+function OwnerFilter({
+  owners,
+  counts,
+  hidden,
+  open,
+  styles,
+  onToggleOpen,
+  onToggleOwner,
+  onSelectAll,
+  onSelectNone,
+}: {
+  owners: readonly string[];
+  counts: ReadonlyMap<string, number>;
+  hidden: ReadonlySet<string>;
+  open: boolean;
+  styles: Styles;
+  onToggleOpen: () => void;
+  onToggleOwner: (owner: string) => void;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+}) {
+  const selected = owners.filter((owner) => !hidden.has(owner)).length;
+  const allSelected = selected === owners.length;
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleOwners =
+    normalizedQuery === ""
+      ? owners
+      : owners.filter((owner) => owner.toLowerCase().includes(normalizedQuery));
+
+  return (
+    <View style={styles.filterAnchor}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Filter owners: ${selected} of ${owners.length} shown`}
+        accessibilityState={{ expanded: open }}
+        style={styles.ghostButton}
+        onPress={onToggleOpen}
+      >
+        <Text style={styles.ghostButtonLabel}>
+          {allSelected ? "All owners" : `${selected}/${owners.length} owners`} ▾
+        </Text>
+      </Pressable>
+      {open ? (
+        <View style={styles.dropdown}>
+          <View style={styles.dropdownActions}>
+            <Pressable style={styles.chipButton} onPress={onSelectAll}>
+              <Text style={styles.chipLabel}>All</Text>
+            </Pressable>
+            <Pressable style={styles.chipButton} onPress={onSelectNone}>
+              <Text style={styles.chipLabel}>None</Text>
+            </Pressable>
+          </View>
+          <TextInput
+            accessibilityLabel="Filter owners by name"
+            style={styles.popoverSearch}
+            placeholder="Filter owners…"
+            placeholderTextColor={styles.popoverEmpty.color}
+            value={query}
+            onChangeText={setQuery}
+            autoCorrect={false}
+          />
+          <ScrollView contentContainerStyle={styles.dropdownList}>
+            {visibleOwners.length === 0 ? (
+              <Text style={styles.popoverEmpty}>No owners match.</Text>
+            ) : (
+              visibleOwners.map((owner) => {
+                const checked = !hidden.has(owner);
+                return (
+                  <Pressable
+                    key={owner}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked }}
+                    onPress={() => onToggleOwner(owner)}
+                    style={({ pressed }) => [styles.dropdownRow, pressed ? styles.cardPressed : null]}
+                  >
+                    <View style={[styles.checkbox, checked ? styles.checkboxChecked : null]}>
+                      {checked ? <Text style={styles.checkmark}>✓</Text> : null}
+                    </View>
+                    <Text style={styles.dropdownLabel} numberOfLines={1}>
+                      {owner}
+                    </Text>
+                    <Text style={styles.dropdownCount}>{counts.get(owner) ?? 0}</Text>
+                  </Pressable>
+                );
+              })
+            )}
+          </ScrollView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The relation chips: every relationship the viewer can filter by, plus "All".
+ * Filtering is client-side over `item.relations`, which is the whole point of
+ * fetching more than the viewer's own work — the server unions every relevant
+ * search, and this bar is where the user narrows it back down.
+ */
+function RelationFilterBar({
+  filters,
+  active,
+  counts,
+  styles,
+  onSelect,
+}: {
+  filters: typeof RELATION_FILTERS;
+  active: string;
+  counts: ReadonlyMap<string, number>;
+  styles: Styles;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <View style={styles.relationRow}>
+      {filters.map((filter) => {
+        const selected = filter.id === active;
+        return (
+          <Pressable
+            key={filter.id}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            onPress={() => onSelect(filter.id)}
+            style={[styles.relationChip, selected ? styles.relationChipActive : null]}
+          >
+            <Text
+              style={[styles.relationChipLabel, selected ? styles.relationChipLabelActive : null]}
+            >
+              {filter.label}
+            </Text>
+            <Text
+              style={[
+                styles.relationChipCount,
+                selected ? styles.relationChipLabelActive : null,
+              ]}
+            >
+              {counts.get(filter.id) ?? 0}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -1407,60 +1774,73 @@ function LabelMenu({
   );
 }
 
-function Card({
+/**
+ * One line of the GitHub-style list: a state glyph, the title with a Draft
+ * pill when it is a folded-in draft pull request, a meta line naming where it
+ * lives and who opened it, and — on the wide layout — the trailing checks,
+ * comment count and labels a card used to spread across its footer. Compact
+ * wraps that trailing group onto a second line instead of dropping it.
+ *
+ * Memoized: a board with thousands of rows re-renders this component for
+ * every visible one on each parent state change (a filter, a search
+ * keystroke), and only the rows whose own props actually changed need to.
+ */
+const ItemRow = memo(function ItemRow({
   item,
   viewerLogin,
   styles,
   platform,
   compact,
   selected,
+  accentColor,
+  mutedColor,
   onOpen,
   onSend,
   onLabels,
   type,
 }: {
   item: BoardItem;
-  /** The login the board was queried for, so a card of someone else's reads as one. */
+  /** The login the board was queried for, so a row of someone else's reads as one. */
   viewerLogin: string;
   styles: Styles;
   /**
-   * Decides two things the card cannot ask about itself: whether hovering
+   * Decides two things the row cannot ask about itself: whether hovering
    * exists at all, and whether a long press is the way to open a menu or the
    * duplicate of a right-click that already did.
    */
   platform: PluginSurfaceProps["layout"]["platform"];
-  /**
-   * Narrow enough that the card owns the width. The send action moves into the
-   * flow and the title gets a line back, because a full-width card holds in two
-   * lines what a 300pt column needed three for.
-   */
+  /** Wraps the trailing checks/comments/labels onto their own line instead of the row's right edge. */
   compact: boolean;
-  /** True while this card's details are open in the panel. */
+  /** True while this row's details are open in the panel. */
   selected: boolean;
-  /** A press: opens the card in the detail panel, never the browser. */
+  /** The state glyph's colour for an open pull request or issue. */
+  accentColor: string;
+  /** The state glyph's colour for a draft or a discussion, and the send icon's. */
+  mutedColor: string;
+  /** A press: opens the row in the detail panel, never the browser. */
   onOpen: (item: BoardItem, type: ColumnId) => void;
   onSend: (item: BoardItem, type: ColumnId) => void;
   /** Null where labels cannot be edited, which takes the gesture away entirely. */
   onLabels: ((item: BoardItem, point: { x: number; y: number }) => void) | null;
-  /** Chooses the prompt template; the card is otherwise column-agnostic. */
+  /** Chooses the prompt template, the state glyph, and the Draft pill. */
   type: ColumnId;
 }) {
   /** Nothing hovers on a touch platform, and the action would hide forever. */
   const isWeb = platform === "web";
   /**
-   * Two hover states, not one. The action sits inside the card, and moving onto
-   * it takes the pointer off the card as far as the card's own hover is
-   * concerned — so tracking only the card would hide the action the moment the
+   * Two hover states, not one. The action sits inside the row, and moving onto
+   * it takes the pointer off the row as far as the row's own hover is
+   * concerned — so tracking only the row would hide the action the moment the
    * user reached for it. Either one being hovered keeps it revealed.
    */
-  const [cardHovered, setCardHovered] = useState(false);
+  const [rowHovered, setRowHovered] = useState(false);
   const [actionHovered, setActionHovered] = useState(false);
 
   /**
    * Revealed by style rather than by mounting: an action that unmounts under the
    * cursor can never report the hover that would have kept it alive.
    */
-  const revealed = !isWeb || cardHovered || actionHovered;
+  const revealed = !isWeb || rowHovered || actionHovered;
 
   const open = useCallback(() => {
     onOpen(item, type);
@@ -1483,7 +1863,7 @@ function Card({
 
   /**
    * Web only, and `preventDefault` first: without it the browser's own menu
-   * opens on top of this one. The left-click that opens the card is a separate
+   * opens on top of this one. The left-click that opens the row is a separate
    * handler, so a right-click never opens the panel.
    */
   const openLabelsFromContextMenu = useCallback(
@@ -1503,10 +1883,45 @@ function Card({
 
   /**
    * Named only when it is not the viewer's own work. Most of the board still is
-   * the viewer's, so a byline on every card would be noise hiding the one thing
+   * the viewer's, so a byline on every row would be noise hiding the one thing
    * it is there to say: someone else opened this.
    */
   const byline = item.author !== null && item.author !== viewerLogin ? item.author : null;
+
+  const iconName =
+    type === "draft-prs"
+      ? "GitPullRequestDraft"
+      : type === "open-prs"
+        ? "GitPullRequest"
+        : type === "discussions"
+          ? "MessageSquare"
+          : "CircleDot";
+  const iconColor = type === "draft-prs" || type === "discussions" ? mutedColor : accentColor;
+
+  const trailing = (
+    <>
+      {item.checks !== null ? <ChecksPills checks={item.checks} styles={styles} /> : null}
+      {item.commentsCount > 0 ? (
+        <Text style={styles.subtle}>{item.commentsCount} comments</Text>
+      ) : null}
+      {item.linkedIssues.map((issue) => (
+        <Text key={issue.id} style={styles.linkedIssue}>
+          {linkedIssueLabel(issue, item.repository)}
+        </Text>
+      ))}
+      {item.detail !== null ? <Text style={styles.label}>{item.detail}</Text> : null}
+      {item.labels.slice(0, 3).map((label) => (
+        <Text key={label} style={styles.label}>
+          {label}
+        </Text>
+      ))}
+      {/* Labels are editable now, so the row has to admit when it is not
+          showing all of them rather than look like the edit did nothing. */}
+      {item.labels.length > 3 ? (
+        <Text style={styles.labelMore}>+{item.labels.length - 3}</Text>
+      ) : null}
+    </>
+  );
 
   return (
     <Pressable
@@ -1528,82 +1943,50 @@ function Card({
       // A web long press is a *held* left click, which right-click already
       // covers — wiring both would open the menu twice on the same gesture.
       onLongPress={onLabels === null || isWeb ? undefined : openLabels}
-      onHoverIn={() => setCardHovered(true)}
-      onHoverOut={() => setCardHovered(false)}
+      onHoverIn={() => setRowHovered(true)}
+      onHoverOut={() => setRowHovered(false)}
       // @ts-expect-error - onContextMenu is web-only and absent from the React Native types.
       onContextMenu={onLabels === null ? undefined : openLabelsFromContextMenu}
       style={({ pressed }) => [
-        styles.card,
-        selected ? styles.cardSelected : null,
-        pressed ? styles.cardPressed : null,
+        styles.itemRow,
+        selected ? styles.itemRowSelected : null,
+        pressed ? styles.itemRowPressed : null,
       ]}
     >
-      <Text style={styles.cardRepo} numberOfLines={1}>
-        {item.repository} #{item.number}
-      </Text>
-      <Text style={styles.cardTitle} numberOfLines={compact ? 2 : 3}>
-        {item.title}
-      </Text>
-      <View style={styles.cardFooter}>
-        {item.checks !== null ? <ChecksPills checks={item.checks} styles={styles} /> : null}
-        {byline !== null ? <Text style={styles.cardAuthor}>by {byline}</Text> : null}
-        <Text style={styles.subtle}>{relativeTime(item.updatedAt)}</Text>
-        {item.commentsCount > 0 ? (
-          <Text style={styles.subtle}>{item.commentsCount} comments</Text>
-        ) : null}
-        {item.linkedIssues.map((issue) => (
-          <Text key={issue.id} style={styles.linkedIssue}>
-            {linkedIssueLabel(issue, item.repository)}
-          </Text>
-        ))}
-        {item.detail !== null ? <Text style={styles.label}>{item.detail}</Text> : null}
-        {item.labels.slice(0, 3).map((label) => (
-          <Text key={label} style={styles.label}>
-            {label}
-          </Text>
-        ))}
-        {/* Labels are editable now, so the card has to admit when it is not
-            showing all of them rather than look like the edit did nothing. */}
-        {item.labels.length > 3 ? (
-          <Text style={styles.labelMore}>+{item.labels.length - 3}</Text>
-        ) : null}
+      <View style={styles.itemRowIcon}>
+        <Icon name={iconName} size={16} color={iconColor} />
       </View>
-      {/* Compact gives the action its own row rather than floating it over the
-          footer: the overlay is only unobtrusive while hover keeps it hidden,
-          and a card the width of the screen has room to spare. */}
-      {compact ? (
-        <View style={styles.cardActions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Send ${item.repository} #${item.number} to a new workspace chat`}
-            onPress={send}
-            style={({ pressed }) => [
-              styles.sendButtonInline,
-              pressed ? styles.sendButtonPressed : null,
-            ]}
-          >
-            <Text style={styles.sendButtonInlineLabel}>Send to chat</Text>
-          </Pressable>
+      <View style={styles.itemRowMain}>
+        <View style={styles.itemRowTitleLine}>
+          <Text style={styles.itemRowTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          {type === "draft-prs" ? <Text style={styles.itemRowDraftPill}>Draft</Text> : null}
         </View>
-      ) : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Send ${item.repository} #${item.number} to a new workspace chat`}
-          onPress={send}
-          onHoverIn={() => setActionHovered(true)}
-          onHoverOut={() => setActionHovered(false)}
-          style={({ pressed }) => [
-            styles.sendButton,
-            revealed ? null : styles.sendButtonHidden,
-            pressed ? styles.sendButtonPressed : null,
-          ]}
-        >
-          <Text style={styles.sendButtonLabel}>Send to chat</Text>
-        </Pressable>
-      )}
+        <Text style={styles.itemRowMeta} numberOfLines={1}>
+          {item.repository} #{item.number} · updated {relativeTime(item.updatedAt)}
+          {byline !== null ? ` by ${byline}` : ""}
+        </Text>
+        {compact ? <View style={styles.itemRowTrailingCompact}>{trailing}</View> : null}
+      </View>
+      {compact ? null : <View style={styles.itemRowTrailing}>{trailing}</View>}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Send ${item.repository} #${item.number} to a new workspace chat`}
+        onPress={send}
+        onHoverIn={() => setActionHovered(true)}
+        onHoverOut={() => setActionHovered(false)}
+        style={({ pressed }) => [
+          styles.iconButton,
+          revealed ? null : styles.itemRowActionHidden,
+          pressed ? styles.cardPressed : null,
+        ]}
+      >
+        <Icon name="Send" size={14} color={mutedColor} />
+      </Pressable>
     </Pressable>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // The launch dialog
@@ -3485,140 +3868,11 @@ function ItemDetailPanel({
   );
 }
 
-function Column({
-  column,
-  viewerLogin,
-  styles,
-  platform,
-  compact,
-  refreshing,
-  onRefresh,
-  selectedId,
-  onOpen,
-  onSend,
-  onLabels,
-}: {
-  column: BoardColumn;
-  viewerLogin: string;
-  styles: Styles;
-  platform: PluginSurfaceProps["layout"]["platform"];
-  /** One column filling the surface, with the tab bar naming it instead of a header. */
-  compact: boolean;
-  refreshing: boolean;
-  /** Pull-to-refresh, which is what replaces the Refresh button on compact. */
-  onRefresh: (() => void) | null;
-  /** The card whose details are open, if any, so it can be drawn selected. */
-  selectedId: string | null;
-  onOpen: (item: BoardItem, type: ColumnId) => void;
-  onSend: (item: BoardItem, type: ColumnId) => void;
-  onLabels: (item: BoardItem, point: { x: number; y: number }) => void;
-}) {
-  /**
-   * Only issues and pull requests. A discussion is labelable on GitHub too, but
-   * the board does not offer it: the columns it does offer are the ones whose
-   * labels a reader acts on.
-   */
-  const labelable = column.id !== "discussions";
-  return (
-    <View style={styles.column}>
-      {/* The compact tab bar already names the column and shows its count, so
-          repeating both directly underneath would cost a row for nothing. */}
-      {compact ? null : (
-        <View style={styles.columnHeader}>
-          <Text style={styles.columnTitle}>{column.title}</Text>
-          <Text style={styles.countPill}>{column.items.length}</Text>
-        </View>
-      )}
-      <ScrollView
-        contentContainerStyle={styles.columnBody}
-        refreshControl={
-          onRefresh === null ? undefined : (
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          )
-        }
-      >
-        {column.error !== null ? (
-          <Text style={styles.danger}>{column.error}</Text>
-        ) : column.items.length === 0 ? (
-          <Text style={styles.empty}>Nothing here.</Text>
-        ) : (
-          column.items.map((item) => (
-            <Card
-              key={item.id}
-              item={item}
-              viewerLogin={viewerLogin}
-              styles={styles}
-              platform={platform}
-              compact={compact}
-              selected={item.id === selectedId}
-              onOpen={onOpen}
-              onSend={onSend}
-              onLabels={labelable ? onLabels : null}
-              type={column.id}
-            />
-          ))
-        )}
-      </ScrollView>
-    </View>
-  );
-}
 
-/**
- * The compact layout's column picker. It carries every column's count, not only
- * the selected one's — the horizontal column scroller it replaces showed one
- * column and hid the other three behind a gesture, which is the opposite of
- * what a board is for.
- */
-function ColumnTabs({
-  columns,
-  activeId,
-  styles,
-  onSelect,
-}: {
-  columns: readonly BoardColumn[];
-  activeId: ColumnId;
-  styles: Styles;
-  onSelect: (id: ColumnId) => void;
-}) {
-  return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={styles.tabBar}
-      contentContainerStyle={styles.tabBarContent}
-    >
-      {/* `.map`, not `for…of`: a closure made in a loop body captures the
-          binding's final value under Hermes. */}
-      {columns.map((column) => {
-        const active = column.id === activeId;
-        return (
-          <Pressable
-            key={column.id}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={
-              column.error === null
-                ? `${column.title}, ${column.items.length}`
-                : `${column.title}, failed to load`
-            }
-            onPress={() => onSelect(column.id)}
-            style={[styles.tab, active ? styles.tabActive : null]}
-          >
-            <Text style={[styles.tabLabel, active ? styles.tabLabelActive : null]}>
-              {column.title}
-            </Text>
-            {column.error === null ? (
-              <Text style={[styles.tabCount, active ? styles.tabCountActive : null]}>
-                {column.items.length}
-              </Text>
-            ) : (
-              <Text style={[styles.tabError, active ? styles.tabCountActive : null]}>!</Text>
-            )}
-          </Pressable>
-        );
-      })}
-    </ScrollView>
-  );
+/** A row in the merged list: the item plus which column supplied it, for the prompt template, the state glyph, and the Draft pill. */
+interface BoardRow {
+  item: BoardItem;
+  type: ColumnId;
 }
 
 export function GitHubBoard(props: PluginSurfaceProps) {
@@ -3635,6 +3889,17 @@ export function GitHubBoard(props: PluginSurfaceProps) {
   const prompts = useSettings(promptSettings);
   const savedHidden = display.status === "ready" ? display.values.hiddenRepositories : null;
   const savedFraction = display.status === "ready" ? display.values.detailWidthFraction : null;
+  const savedRelation = display.status === "ready" ? display.values.relation : null;
+  /**
+   * The organisations and users to sweep beyond the viewer's own buckets, read
+   * fresh every render and mirrored onto a ref: `refresh` needs the *latest*
+   * value at call time without becoming a new function every time settings
+   * change, which would otherwise re-run the mount effect below on every
+   * settings read.
+   */
+  const watchedOwners = display.status === "ready" ? display.values.watchedOwners : [];
+  const watchedOwnersRef = useRef<readonly string[]>(watchedOwners);
+  watchedOwnersRef.current = watchedOwners;
   /**
    * Null while the read is pending. `useSettings` reports `loading` before it
    * reports values, and rendering the schema defaults during that window would
@@ -3689,6 +3954,7 @@ export function GitHubBoard(props: PluginSurfaceProps) {
         if (takeFilter || takeWidth) {
           const saved = await display.save(
             {
+              ...display.values,
               hiddenRepositories: takeFilter
                 ? [...(legacy.hiddenRepositories ?? [])].sort()
                 : display.values.hiddenRepositories,
@@ -3727,9 +3993,18 @@ export function GitHubBoard(props: PluginSurfaceProps) {
   const [busy, setBusy] = useState(cachedBoard === null);
   const [loginDraft, setLoginDraft] = useState(cachedBoard?.login ?? "");
   const [hiddenRepos, setHiddenRepos] = useState<ReadonlySet<string>>(() => new Set());
-  const [filterOpen, setFilterOpen] = useState(false);
-  /** Which column the compact layout shows. Ignored where all four fit at once. */
-  const [columnId, setColumnId] = useState<ColumnId>(cachedColumnId);
+  /** Owners hidden from the current view. Not persisted: only the relation filter is. */
+  const [hiddenOwners, setHiddenOwners] = useState<ReadonlySet<string>>(() => new Set());
+  /** Which of the two dropdowns is open; never both at once, so one backdrop closes either. */
+  const [openFilter, setOpenFilter] = useState<"repo" | "owner" | null>(null);
+  /** The last relation chip picked, hydrated from and persisted to `displaySettings`. */
+  const [relationFilter, setRelationFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  /**
+   * Which of the four modes fills the body. Not persisted — the user picks it
+   * fresh every time the surface mounts, the way a browser tab does.
+   */
+  const [mode, setMode] = useState<BoardMode>("pull-requests");
   /** The surface shows one of two things; plugins cannot route between surfaces. */
   const [showSettings, setShowSettings] = useState(false);
   /** The card the launch dialog is open on, with its prompt already rendered. */
@@ -3787,6 +4062,14 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     setHiddenRepos(new Set(savedHidden));
   }, [savedHidden]);
 
+  /** Same one-shot adoption as the repository filter, for the relation chip. */
+  const relationHydrated = useRef(false);
+  useEffect(() => {
+    if (relationHydrated.current || savedRelation === null) return;
+    relationHydrated.current = true;
+    setRelationFilter(savedRelation === "all" || isRelation(savedRelation) ? savedRelation : "all");
+  }, [savedRelation]);
+
   /**
    * Async **function expressions**, never async arrows, anywhere in the client
    * bundle: the app `eval`s this bundle, and Hermes's eval compiler on iOS and
@@ -3800,9 +4083,13 @@ export function GitHubBoard(props: PluginSurfaceProps) {
       setBusy(true);
       setError(null);
       try {
-        const next = await load(login === undefined ? { force } : { login, force });
+        const owners = watchedOwnersRef.current;
+        const next = await load(
+          login === undefined ? { owners: [...owners], force } : { login, owners: [...owners], force },
+        );
         cachedBoard = next;
         cachedFetchedAt = Date.now();
+        cachedOwners = owners;
         setBoard(next);
         setLoginDraft(next.login);
       } catch (cause) {
@@ -3822,7 +4109,24 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     void refresh();
   }, [refresh]);
 
-  /** Every repository with a card in any column, whether or not it is filtered out. */
+  /**
+   * Refetches once the watched-owner sweep settles on something the last
+   * completed load did not already cover — including the very first time the
+   * settings read lands, which may add owners the mount effect above fetched
+   * without. A cached board that is still "fresh" would otherwise never
+   * notice the sweep has changed underneath it.
+   */
+  useEffect(() => {
+    if (display.status !== "ready") return;
+    const owners = display.values.watchedOwners;
+    const prior = cachedOwners;
+    const changed =
+      owners.length !== prior.length || owners.some((owner, index) => owner !== prior[index]);
+    if (!changed) return;
+    void refresh(undefined, true);
+  }, [display, refresh]);
+
+  /** Every repository with an item in any column, whether or not it is filtered out. */
   const repositories = useMemo(() => {
     const seen = new Set<string>();
     for (const column of board?.columns ?? []) {
@@ -3833,8 +4137,16 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     return [...seen].sort((a, b) => a.localeCompare(b));
   }, [board]);
 
-  const columns = useMemo(() => {
-    if (board === null) return [];
+  /**
+   * The board's four columns with the repository filter applied and, once
+   * that leaves a pull request's linked issue with nothing claiming it,
+   * folded so the issue keeps only the pull request's card. Every mode reads
+   * from here — no column is dropped for being empty, because which one is on
+   * screen is now the user's own choice via the mode switcher rather than a
+   * layout decision.
+   */
+  const filteredColumns = useMemo(() => {
+    if (board === null) return null;
     const visible =
       hiddenRepos.size === 0
         ? board.columns
@@ -3845,12 +4157,12 @@ export function GitHubBoard(props: PluginSurfaceProps) {
 
     /**
      * An issue with a pull request open against it is the same piece of work as
-     * that pull request, so it gets one card, not two — the pull request's,
+     * that pull request, so it gets one row, not two — the pull request's,
      * carrying the issue as a pill. Drafts count: the work exists either way.
      *
-     * This runs after the repository filter rather than on the server, so a pull
-     * request hidden by the filter stops claiming its issue instead of taking
-     * the issue's card off the board with it.
+     * This runs after the repository filter rather than on the server, so a
+     * pull request hidden by the filter stops claiming its issue instead of
+     * taking the issue's row off the board with it.
      */
     const claimed = new Set<string>();
     for (const column of visible) {
@@ -3859,43 +4171,132 @@ export function GitHubBoard(props: PluginSurfaceProps) {
         for (const issue of item.linkedIssues) claimed.add(issue.id);
       }
     }
-    const resolved =
-      claimed.size === 0
-        ? visible
-        : visible.map((column) =>
-            column.id === "issues"
-              ? { ...column, items: column.items.filter((item) => !claimed.has(item.id)) }
-              : column,
-          );
-
-    /**
-     * A column with nothing in it costs a quarter of the width, or a tab, to say
-     * nothing, so it comes off the board. A column that failed to load is empty
-     * too and stays: there, the emptiness is the error rather than the answer.
-     *
-     * When that leaves nothing at all, every column comes back. Four "Nothing
-     * here." columns read as a board that loaded and found nothing, and on
-     * compact they keep the tab bar and the pull-to-refresh that are the only
-     * way off an otherwise blank surface.
-     */
-    const populated = resolved.filter(
-      (column) => column.items.length > 0 || column.error !== null,
+    if (claimed.size === 0) return visible;
+    return visible.map((column) =>
+      column.id === "issues"
+        ? { ...column, items: column.items.filter((item) => !claimed.has(item.id)) }
+        : column,
     );
-    return populated.length === 0 ? resolved : populated;
   }, [board, hiddenRepos]);
 
-  /**
-   * The column the compact layout is showing. Falls back to the first rather
-   * than rendering nothing if a saved id ever names a column the board no
-   * longer has.
-   */
-  const activeColumn =
-    columns.find((column) => column.id === columnId) ?? columns[0] ?? null;
+  const issuesColumn = filteredColumns?.find((column) => column.id === "issues") ?? null;
+  const draftColumn = filteredColumns?.find((column) => column.id === "draft-prs") ?? null;
+  const openColumn = filteredColumns?.find((column) => column.id === "open-prs") ?? null;
+  const discussionsColumn = filteredColumns?.find((column) => column.id === "discussions") ?? null;
 
-  const selectColumn = useCallback((id: ColumnId) => {
-    cachedColumnId = id;
-    setColumnId(id);
-  }, []);
+  /** Discussions only earns a place in the switcher when there is something to show for it, or a reason it failed to load. */
+  const showDiscussionsMode =
+    discussionsColumn !== null &&
+    (discussionsColumn.items.length > 0 || discussionsColumn.error !== null);
+
+  useEffect(() => {
+    if (mode === "discussions" && !showDiscussionsMode) setMode("pull-requests");
+  }, [mode, showDiscussionsMode]);
+
+  /**
+   * The rows the active mode shows, before the relation, owner and search
+   * filters narrow them further. Draft and open pull requests are merged into
+   * one list here — the switcher's whole point — sorted back into one
+   * chronological order rather than left as "every draft, then every open".
+   */
+  const modeRows = useMemo((): { rows: BoardRow[]; error: string | null } => {
+    if (mode === "pull-requests") {
+      const rows: BoardRow[] = [
+        ...(draftColumn?.items.map((item) => ({ item, type: "draft-prs" as const })) ?? []),
+        ...(openColumn?.items.map((item) => ({ item, type: "open-prs" as const })) ?? []),
+      ];
+      rows.sort((a, b) => b.item.updatedAt.localeCompare(a.item.updatedAt));
+      return { rows, error: draftColumn?.error ?? openColumn?.error ?? null };
+    }
+    if (mode === "issues") {
+      return {
+        rows: issuesColumn?.items.map((item) => ({ item, type: "issues" as const })) ?? [],
+        error: issuesColumn?.error ?? null,
+      };
+    }
+    if (mode === "discussions") {
+      return {
+        rows: discussionsColumn?.items.map((item) => ({ item, type: "discussions" as const })) ?? [],
+        error: discussionsColumn?.error ?? null,
+      };
+    }
+    return { rows: [], error: null };
+  }, [mode, draftColumn, openColumn, issuesColumn, discussionsColumn]);
+
+  /**
+   * The chips this mode has any use for, and the relation actually applied.
+   * A saved relation the mode does not offer falls back to "All" here rather
+   * than being overwritten: switching to Issues should not lose the "Needs my
+   * review" the user picked on Pull requests and will find again on the way
+   * back.
+   */
+  const visibleRelations = useMemo(
+    () => RELATION_FILTERS.filter((filter) => filter.modes?.includes(mode) ?? true),
+    [mode],
+  );
+  const effectiveRelation = visibleRelations.some((filter) => filter.id === relationFilter)
+    ? relationFilter
+    : "all";
+
+  /** How many rows each relation chip would show, from the active mode's rows before that chip is applied. */
+  const relationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const filter of visibleRelations) {
+      // `isRelation` narrows, so the count below needs no cast: a chip id that
+      // is not a relation is "all", which counts every row.
+      const wanted = isRelation(filter.id) ? filter.id : null;
+      counts.set(
+        filter.id,
+        wanted === null
+          ? modeRows.rows.length
+          : modeRows.rows.filter((row) => row.item.relations.includes(wanted)).length,
+      );
+    }
+    return counts;
+  }, [modeRows, visibleRelations]);
+
+  const relationFiltered = useMemo(() => {
+    if (effectiveRelation === "all" || !isRelation(effectiveRelation)) return modeRows.rows;
+    const wanted = effectiveRelation;
+    return modeRows.rows.filter((row) => row.item.relations.includes(wanted));
+  }, [modeRows, effectiveRelation]);
+
+  /** Every distinct owner on the board, independent of the active mode, so switching modes never reshuffles the dropdown. */
+  const allOwners = useMemo(() => {
+    const seen = new Set<string>();
+    for (const column of filteredColumns ?? []) {
+      for (const item of column.items) seen.add(item.owner);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }, [filteredColumns]);
+
+  /** How many of the relation-filtered rows each owner would keep. */
+  const ownerCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of relationFiltered) {
+      counts.set(row.item.owner, (counts.get(row.item.owner) ?? 0) + 1);
+    }
+    return counts;
+  }, [relationFiltered]);
+
+  const ownerFiltered = useMemo(() => {
+    if (hiddenOwners.size === 0) return relationFiltered;
+    return relationFiltered.filter((row) => !hiddenOwners.has(row.item.owner));
+  }, [relationFiltered, hiddenOwners]);
+
+  /** Relation, then owner, then repository (already applied in `filteredColumns`), then this free-text search. */
+  const displayRows = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (query === "") return ownerFiltered;
+    return ownerFiltered.filter(
+      (row) =>
+        row.item.title.toLowerCase().includes(query) ||
+        row.item.repository.toLowerCase().includes(query) ||
+        String(row.item.number).includes(query),
+    );
+  }, [ownerFiltered, searchQuery]);
+
+  const selectColumnMode = useCallback((id: BoardMode) => setMode(id), []);
 
   /**
    * Applies a selection locally and saves it, so it survives the next unmount.
@@ -3911,6 +4312,17 @@ export function GitHubBoard(props: PluginSurfaceProps) {
         .then((saved) => {
           if (!saved) setError(`Repository filter could not be saved: ${display.saveError ?? ""}`);
         });
+    },
+    [display],
+  );
+
+  const commitRelation = useCallback(
+    (next: string) => {
+      setRelationFilter(next);
+      if (display.status !== "ready") return;
+      void display.save({ ...display.values, relation: next }, display.revision).then((saved) => {
+        if (!saved) setError(`Relation filter could not be saved: ${display.saveError ?? ""}`);
+      });
     },
     [display],
   );
@@ -3948,6 +4360,20 @@ export function GitHubBoard(props: PluginSurfaceProps) {
   const selectNoRepos = useCallback(() => {
     commitHidden(new Set(repositories));
   }, [commitHidden, repositories]);
+
+  const toggleOwner = useCallback((owner: string) => {
+    setHiddenOwners((current) => {
+      const next = new Set(current);
+      if (!next.delete(owner)) next.add(owner);
+      return next;
+    });
+  }, []);
+
+  const selectAllOwners = useCallback(() => setHiddenOwners(new Set()), []);
+  const selectNoOwners = useCallback(
+    () => setHiddenOwners(new Set(allOwners)),
+    [allOwners],
+  );
 
   /**
    * Opens the label menu where the user clicked.
@@ -4039,6 +4465,8 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     return detailTarget.item;
   }, [board, detailTarget]);
 
+  const selectedId = detailItem?.id ?? null;
+
   /**
    * Opens the launch dialog on this card, with the card's template already
    * rendered into the first message. Everything else — the project lookup, the
@@ -4112,27 +4540,46 @@ export function GitHubBoard(props: PluginSurfaceProps) {
     [prompts, toast],
   );
 
+  const renderRow = useCallback(
+    ({ item: row }: { item: BoardRow }) => (
+      <ItemRow
+        item={row.item}
+        viewerLogin={board?.login ?? ""}
+        styles={styles}
+        platform={props.layout.platform}
+        compact={props.layout.compact}
+        selected={row.item.id === selectedId}
+        accentColor={props.theme.colors.accent}
+        mutedColor={props.theme.colors.foregroundMuted}
+        onOpen={openDetails}
+        onSend={openSendDialog}
+        onLabels={row.type === "discussions" ? null : openLabelMenu}
+        type={row.type}
+      />
+    ),
+    [
+      board?.login,
+      styles,
+      props.layout.platform,
+      props.layout.compact,
+      selectedId,
+      props.theme.colors.accent,
+      props.theme.colors.foregroundMuted,
+      openDetails,
+      openSendDialog,
+      openLabelMenu,
+    ],
+  );
+
   return (
     <View ref={rootRef} style={styles.screen}>
       <View style={styles.header}>
         {/* The surface chrome already names the plugin, and on a phone that
-            title is the width the repository filter needs. The settings view
+            title is the width the mode switcher needs. The settings view
             keeps its own, because the chrome does not say which view this is. */}
         {props.layout.compact && !showSettings ? null : (
           <Text style={styles.title}>{showSettings ? "GitHub settings" : "GitHub"}</Text>
         )}
-        {showSettings ? null : repositories.length > 0 ? (
-          <RepoFilter
-            repositories={repositories}
-            hidden={hiddenRepos}
-            open={filterOpen}
-            styles={styles}
-            onToggleOpen={() => setFilterOpen((open) => !open)}
-            onToggleRepo={toggleRepo}
-            onSelectAll={selectAllRepos}
-            onSelectNone={selectNoRepos}
-          />
-        ) : null}
         <View style={styles.headerSpacer} />
         {showSettings ? (
           <Pressable
@@ -4154,7 +4601,7 @@ export function GitHubBoard(props: PluginSurfaceProps) {
               accessibilityLabel="Configure prompts"
               style={({ pressed }) => [styles.iconButton, pressed ? styles.cardPressed : null]}
               onPress={() => {
-                setFilterOpen(false);
+                setOpenFilter(null);
                 setShowSettings(true);
               }}
             >
@@ -4184,11 +4631,86 @@ export function GitHubBoard(props: PluginSurfaceProps) {
         )}
       </View>
 
-      {filterOpen ? (
+      {showSettings ? null : (
+        <View style={styles.modeBar}>
+          {/* `.map`, not `for…of`: a closure made in a loop body captures the
+              binding's final value under Hermes. */}
+          {BOARD_MODES.filter((entry) => entry.id !== "discussions" || showDiscussionsMode).map(
+            (entry) => {
+              const active = entry.id === mode;
+              return (
+                <Pressable
+                  key={entry.id}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: active }}
+                  onPress={() => selectColumnMode(entry.id)}
+                  style={[styles.modeButton, active ? styles.modeButtonActive : null]}
+                >
+                  <Text
+                    style={[styles.modeButtonLabel, active ? styles.modeButtonLabelActive : null]}
+                  >
+                    {entry.label}
+                  </Text>
+                </Pressable>
+              );
+            },
+          )}
+        </View>
+      )}
+
+      {showSettings || mode === "projects" ? null : (
+        <View style={styles.filterBar}>
+          <RelationFilterBar
+            filters={visibleRelations}
+            active={effectiveRelation}
+            counts={relationCounts}
+            styles={styles}
+            onSelect={commitRelation}
+          />
+          {allOwners.length > 0 ? (
+            <OwnerFilter
+              owners={allOwners}
+              counts={ownerCounts}
+              hidden={hiddenOwners}
+              open={openFilter === "owner"}
+              styles={styles}
+              onToggleOpen={() =>
+                setOpenFilter((current) => (current === "owner" ? null : "owner"))
+              }
+              onToggleOwner={toggleOwner}
+              onSelectAll={selectAllOwners}
+              onSelectNone={selectNoOwners}
+            />
+          ) : null}
+          {repositories.length > 0 ? (
+            <RepoFilter
+              repositories={repositories}
+              hidden={hiddenRepos}
+              open={openFilter === "repo"}
+              styles={styles}
+              onToggleOpen={() => setOpenFilter((current) => (current === "repo" ? null : "repo"))}
+              onToggleRepo={toggleRepo}
+              onSelectAll={selectAllRepos}
+              onSelectNone={selectNoRepos}
+            />
+          ) : null}
+          <TextInput
+            accessibilityLabel="Search title, repository, or number"
+            style={styles.searchInput}
+            placeholder="Search title, repo, or #number"
+            placeholderTextColor={styles.subtle.color}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCorrect={false}
+          />
+        </View>
+      )}
+
+      {openFilter !== null ? (
         <Pressable
-          accessibilityLabel="Close repository filter"
+          accessibilityLabel="Close filter"
           style={styles.backdrop}
-          onPress={() => setFilterOpen(false)}
+          onPress={() => setOpenFilter(null)}
         />
       ) : null}
 
@@ -4218,54 +4740,38 @@ export function GitHubBoard(props: PluginSurfaceProps) {
             <View style={styles.centered}>
               {busy ? <ActivityIndicator color={props.theme.colors.accent} /> : null}
             </View>
-          ) : props.layout.compact ? (
-            <>
-              <ColumnTabs
-                columns={columns}
-                activeId={activeColumn?.id ?? columnId}
-                styles={styles}
-                onSelect={selectColumn}
-              />
-              {activeColumn === null ? null : (
-                <Column
-                  // Keyed by column, so switching tabs starts the new list at the
-                  // top instead of inheriting the last one's scroll offset.
-                  key={activeColumn.id}
-                  column={activeColumn}
-                  viewerLogin={board.login}
-                  styles={styles}
-                  platform={props.layout.platform}
-                  compact
-                  refreshing={busy}
-                  onRefresh={() => void refresh(undefined, true)}
-                  selectedId={detailItem?.id ?? null}
-                  onOpen={openDetails}
-                  onSend={openSendDialog}
-                  onLabels={openLabelMenu}
-                />
-              )}
-            </>
+          ) : mode === "projects" ? (
+            <ProjectsView
+              theme={props.theme}
+              layout={props.layout}
+              login={board.login}
+              owners={watchedOwners}
+              onOpenUrl={openExternalUrl}
+            />
           ) : (
-            <View style={[styles.columns, styles.columnsContent]}>
-              {columns.map((column) => (
-                <Column
-                  key={column.id}
-                  column={column}
-                  viewerLogin={board.login}
-                  styles={styles}
-                  platform={props.layout.platform}
-                  compact={false}
-                  refreshing={false}
-                  onRefresh={null}
-                  selectedId={detailItem?.id ?? null}
-                  onOpen={openDetails}
-                  onSend={openSendDialog}
-                  onLabels={openLabelMenu}
-                />
-              ))}
-            </View>
+            <FlatList
+              style={styles.rowList}
+              data={displayRows}
+              keyExtractor={(row) => row.item.id}
+              renderItem={renderRow}
+              ListEmptyComponent={
+                modeRows.error !== null ? (
+                  <Text style={[styles.danger, styles.empty]}>{modeRows.error}</Text>
+                ) : modeRows.rows.length === 0 ? (
+                  <Text style={styles.empty}>Nothing here.</Text>
+                ) : (
+                  <Text style={styles.empty}>No items match the current filters.</Text>
+                )
+              }
+              contentContainerStyle={styles.rowListContent}
+              refreshControl={
+                props.layout.compact ? (
+                  <RefreshControl refreshing={busy} onRefresh={() => void refresh(undefined, true)} />
+                ) : undefined
+              }
+            />
           )}
-          {/* Last in the body, so it paints over the columns by order alone;
+          {/* Last in the body, so it paints over the list by order alone;
               the header above keeps its own zIndex and stays reachable. The
               scrim only exists where the panel leaves board to blur. */}
           {detailTarget !== null && detailItem !== null && !props.layout.compact ? (

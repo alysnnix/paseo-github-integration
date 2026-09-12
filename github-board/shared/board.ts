@@ -34,6 +34,29 @@ export const CheckSummarySchema = z.object({
   pending: z.number().int().min(0),
 });
 
+/**
+ * How the viewer is attached to an item, and the whole reason the board can
+ * show other people's work without drowning: the server runs one search per
+ * relationship and unions the results, so a card carries every relationship
+ * that found it and the filter bar is a client-side narrowing rather than
+ * another round trip.
+ *
+ * `owned` is the odd one out: it means the item lives under a watched owner
+ * and has no personal relationship at all, which is exactly the pile you want
+ * to be able to hide.
+ */
+export const RELATION_IDS = [
+  "author",
+  "review-requested",
+  "mentioned",
+  "assigned",
+  "owned",
+] as const;
+
+export const RelationSchema = z.enum(RELATION_IDS);
+
+export type Relation = z.output<typeof RelationSchema>;
+
 export const BoardItemSchema = z.object({
   id: z.string(),
   number: z.number().int(),
@@ -53,6 +76,13 @@ export const BoardItemSchema = z.object({
   author: z.string().nullable(),
   /** Column-specific trailing detail, e.g. a discussion's category. */
   detail: z.string().nullable(),
+  /** The owner half of `repository`, for the owner filter. */
+  owner: z.string(),
+  /**
+   * Every relationship the viewer has to this item, deduplicated. Empty is
+   * impossible: an item is on the board because some search matched it.
+   */
+  relations: z.array(RelationSchema),
   /**
    * Pull requests only, empty everywhere else. The board renders these as pills
    * on the pull request card and drops the matching cards from the Issues
@@ -157,6 +187,13 @@ export const loadBoard = defineRpc({
   input: z.object({
     /** Omitted on first load: the server falls back to the saved login. */
     login: z.string().optional(),
+    /**
+     * The organisations and users to sweep beyond the viewer's own buckets.
+     * They travel in the request rather than being read on the daemon because
+     * a plugin server registers settings but never reads them: the document
+     * belongs to the app, so the caller is the only side that has it.
+     */
+    owners: z.array(z.string()).default([]),
     limit: z.number().int().min(1).max(100).default(30),
     /** Set by the Refresh button to bypass the server's short-lived board cache. */
     force: z.boolean().default(false),
@@ -168,6 +205,95 @@ export const saveLogin = defineRpc({
   name: "board.save-login",
   input: z.object({ login: z.string() }),
   output: z.object({ login: z.string() }),
+});
+
+/**
+ * One GitHub Projects v2 board the login owns. Projects are their own object
+ * on GitHub, not a field of an issue, so they are fetched on their own rather
+ * than folded into the four columns: an item can sit in several projects, and
+ * a project can hold drafts that are not issues at all.
+ */
+export const ProjectSummarySchema = z.object({
+  id: z.string(),
+  number: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+  shortDescription: z.string().nullable(),
+  /** The login that owns the board, which is not always the queried login. */
+  owner: z.string(),
+  closed: z.boolean(),
+  updatedAt: z.string(),
+  itemCount: z.number().int().min(0),
+});
+
+export type ProjectSummary = z.output<typeof ProjectSummarySchema>;
+
+/**
+ * Projects v2 needs the `read:project` scope, which `gh auth login` does not
+ * grant by default, so a token without it is the common case rather than an
+ * error: `error` carries the sentence to show, and `projects` comes back
+ * empty. The view says what to run instead of rendering a failure.
+ */
+export const listProjects = defineRpc({
+  name: "board.projects",
+  input: z.object({
+    login: z.string().optional(),
+    /** Same reason as `loadBoard.owners`: the server cannot read settings. */
+    owners: z.array(z.string()).default([]),
+    force: z.boolean().default(false),
+  }),
+  output: z.object({
+    projects: z.array(ProjectSummarySchema),
+    error: z.string().nullable(),
+    /** True when the only thing missing is the scope, so the view can say so. */
+    needsScope: z.boolean(),
+  }),
+});
+
+/**
+ * An item on a project board. A draft has no repository, number or url: it is
+ * a note that lives only in the project until someone converts it, so those
+ * fields are nullable rather than faked.
+ */
+export const ProjectItemSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["issue", "pull-request", "draft"]),
+  title: z.string(),
+  url: z.string().nullable(),
+  repository: z.string().nullable(),
+  number: z.number().int().nullable(),
+  state: z.enum(["open", "draft", "closed", "merged"]).nullable(),
+  author: z.string().nullable(),
+  labels: z.array(z.string()),
+  updatedAt: z.string(),
+});
+
+export type ProjectItem = z.output<typeof ProjectItemSchema>;
+
+/**
+ * One project's items grouped the way the project groups them: by its Status
+ * single-select field, in the order the field declares its options, with
+ * whatever has no status last. That is the board GitHub renders, so the plugin
+ * renders the same rather than inventing an order.
+ */
+export const loadProject = defineRpc({
+  name: "board.project",
+  input: z.object({
+    owner: z.string().min(1),
+    number: z.number().int(),
+    force: z.boolean().default(false),
+  }),
+  output: z.object({
+    title: z.string(),
+    url: z.string(),
+    columns: z.array(
+      z.object({
+        /** The Status option, or an empty string for the no-status group. */
+        name: z.string(),
+        items: z.array(ProjectItemSchema),
+      }),
+    ),
+  }),
 });
 
 /**

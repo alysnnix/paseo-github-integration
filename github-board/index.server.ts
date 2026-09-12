@@ -3,10 +3,12 @@ import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
   approveHandler,
   listLabelsHandler,
+  listProjectsHandler,
   loadBoardHandler,
   loadCommentsHandler,
   loadImageHandler,
   loadItemHandler,
+  loadProjectHandler,
   legacySettingsTakenHandler,
   mergeHandler,
   saveLoginHandler,
@@ -18,10 +20,12 @@ import {
 import {
   approvePullRequest,
   listLabels,
+  listProjects,
   loadBoard,
   loadComments,
   loadImage,
   loadItem,
+  loadProject,
   legacySettingsTaken,
   mergePullRequest,
   saveLogin,
@@ -34,6 +38,8 @@ import { displaySettings, promptSettings } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {
   server.handle(loadBoard, loadBoardHandler);
+  server.handle(listProjects, listProjectsHandler);
+  server.handle(loadProject, loadProjectHandler);
   server.handle(loadItem, loadItemHandler);
   server.handle(loadComments, loadCommentsHandler);
   server.handle(loadImage, loadImageHandler);

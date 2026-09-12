@@ -12,6 +12,9 @@ import type {
   ItemComment,
   ItemDetails,
   MergeMethod,
+  ProjectItem,
+  ProjectSummary,
+  Relation,
   RepositoryLabel,
   ReviewState,
   LaunchDefaults,
@@ -21,10 +24,12 @@ import type {
   approvePullRequest,
   legacySettingsTaken,
   listLabels,
+  listProjects,
   loadBoard,
   loadComments,
   loadImage,
   loadItem,
+  loadProject,
   mergePullRequest,
   saveLogin,
   sendOptions,
@@ -32,6 +37,9 @@ import type {
   takeLegacySettings,
   toggleLabel,
 } from "../shared/board";
+// A value import: relation order is read at runtime to sort each item's
+// `relations`, not just referenced in a type position like the rest above.
+import { RELATION_IDS } from "../shared/board";
 import { isGitHubImageHost } from "../shared/image-host";
 // A value import, unlike everything taken from `../shared/board`: the row this
 // module writes has to carry the same key the client renderer registers, and
@@ -295,20 +303,17 @@ interface GhSearchNode {
 }
 
 function toItem(node: GhSearchNode, detail: string | null): BoardItem {
-  const labelNodes = node.labels?.nodes;
-  const labels = Array.isArray(labelNodes)
-    ? labelNodes
-        .map((label) => (label as { name?: unknown }).name)
-        .filter((name): name is string => typeof name === "string")
-    : [];
+  const labels = labelNodeNames(node.labels?.nodes);
   const comments = node.comments?.totalCount;
+  const repository =
+    typeof node.repository?.nameWithOwner === "string" ? node.repository.nameWithOwner : "";
+  const ownerSeparator = repository.indexOf("/");
   return {
     id: typeof node.id === "string" ? node.id : String(node.url),
     number: typeof node.number === "number" ? node.number : 0,
     title: typeof node.title === "string" ? node.title : "",
     url: typeof node.url === "string" ? node.url : "",
-    repository:
-      typeof node.repository?.nameWithOwner === "string" ? node.repository.nameWithOwner : "",
+    repository,
     updatedAt: typeof node.updatedAt === "string" ? node.updatedAt : "",
     commentsCount: typeof comments === "number" ? comments : 0,
     labels,
@@ -316,6 +321,11 @@ function toItem(node: GhSearchNode, detail: string | null): BoardItem {
     // author at all; the card shows nothing instead of an authorless byline.
     author: typeof node.author?.login === "string" ? node.author.login : null,
     detail,
+    // The owner half of `repository`, for the owner filter.
+    owner: ownerSeparator === -1 ? repository : repository.slice(0, ownerSeparator),
+    // Overwritten by `mergeBucketResults` the moment the item is first added;
+    // never observed empty because an item only exists here as a search hit.
+    relations: [],
     // Only pull requests link issues; every other caller keeps the empty list.
     linkedIssues: [],
     // Filled for open pull requests only, by fetchChecks; see attachChecks.
@@ -331,22 +341,40 @@ function toItem(node: GhSearchNode, detail: string | null): BoardItem {
  */
 const UNARCHIVED_ONLY = "archived:false";
 
+/** GraphQL aliases cannot contain a hyphen, so relation buckets get plain numeric names. */
+function aliasName(index: number): string {
+  return `b${index}`;
+}
+
+/** One relation the viewer can have to an item, and the search qualifier that finds it. */
+interface RelationBucket {
+  relation: Relation;
+  qualifier: string;
+}
+
 /**
- * Every column is two searches: what this login authored, anywhere, and
- * everything in the repositories this login owns, whoever opened it. The second
- * is what puts other people's work on the board — an issue someone files on
- * your own repository is yours to answer even though you did not write it.
- *
- * They cannot be one query. GitHub search ANDs its qualifiers, so
- * `author:x user:x` is "authored by x, in x's repositories" — narrower than
- * either half, not their union. Two aliased searches are still one request,
- * which is what keeps a refresh at three subprocesses rather than six.
+ * The relation buckets GitHub search can answer for a login directly.
+ * `review-requested` is pull requests only — issues have no such qualifier —
+ * so it is left off entirely rather than run and always come back empty.
  */
-function dualSearchQuery(type: "ISSUE" | "DISCUSSION", selection: string): string {
-  return `query($mine: String!, $owned: String!, $limit: Int!) {
-  mine: search(query: $mine, type: ${type}, first: $limit) { nodes { ${selection} } }
-  owned: search(query: $owned, type: ${type}, first: $limit) { nodes { ${selection} } }
-}`;
+function personalBuckets(login: string, includeReviewRequested: boolean): RelationBucket[] {
+  const buckets: RelationBucket[] = [];
+  if (includeReviewRequested) {
+    buckets.push({ relation: "review-requested", qualifier: `review-requested:${login}` });
+  }
+  buckets.push({ relation: "mentioned", qualifier: `mentions:${login}` });
+  buckets.push({ relation: "assigned", qualifier: `assignee:${login}` });
+  buckets.push({ relation: "author", qualifier: `author:${login}` });
+  return buckets;
+}
+
+/**
+ * One bucket per watched owner, each carrying the `owned` relation. An owner
+ * can hold thousands of open items, so every bucket is truncated at `limit`
+ * the same as a personal one rather than fetched in full.
+ */
+function ownedBuckets(owners: readonly string[]): RelationBucket[] {
+  return owners.map((owner) => ({ relation: "owned", qualifier: `user:${owner}` }));
 }
 
 function nodesOf(result: unknown): unknown[] {
@@ -354,48 +382,168 @@ function nodesOf(result: unknown): unknown[] {
   return Array.isArray(nodes) ? nodes : [];
 }
 
-/**
- * Runs both halves in one request and returns their nodes back to back. They
- * overlap wherever the login authored something on a repository it owns, which
- * is what `mergeItems` deduplicates.
- */
-async function dualSearch(
-  query: string,
-  mine: string,
-  owned: string,
-  limit: number,
-): Promise<unknown[]> {
-  const raw = await gh([
-    "api",
-    "graphql",
-    "-f",
-    `query=${query}`,
-    "-f",
-    `mine=${mine}`,
-    "-f",
-    `owned=${owned}`,
-    "-F",
-    `limit=${limit}`,
-  ]);
-  const parsed: unknown = JSON.parse(raw);
-  const data = (parsed as { data?: Record<string, unknown> }).data;
-  return [...nodesOf(data?.mine), ...nodesOf(data?.owned)];
+interface GraphqlError {
+  type?: string;
+  path?: unknown[];
+  message: string;
+}
+
+interface GraphqlResult {
+  /**
+   * Null only when every field GitHub tried to run failed before execution
+   * even started, e.g. a scope the token lacks — see `needsProjectScope`.
+   * A per-field runtime failure (a deleted owner) still comes back with
+   * `data`, just missing that one field.
+   */
+  data: Record<string, unknown> | null;
+  errors: GraphqlError[];
+}
+
+function toGraphqlResult(parsed: unknown): GraphqlResult {
+  if (typeof parsed !== "object" || parsed === null) return { data: null, errors: [] };
+  // The response envelope: only these two top keys are asserted here, whatever
+  // they hold is narrowed field by field below.
+  const { data, errors }: { data?: unknown; errors?: unknown } = parsed;
+  // GraphQL data keys are the request's own aliases, never known ahead of time.
+  const record = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : null;
+  // Just proved to be an array; each entry's own fields are read via typeof below.
+  const list = Array.isArray(errors) ? (errors as GraphqlError[]) : [];
+  return { data: record, errors: list };
+}
+
+/** `execFile`'s promisified rejection carries the process's stdout here, same as its stderr. */
+function readErrorStdout(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "";
+  const { stdout }: { stdout?: unknown } = error;
+  return typeof stdout === "string" ? stdout : "";
 }
 
 /**
- * The two searches overlap on everything the login authored in its own
- * repositories, so the union is deduplicated by node id. Each half is sorted
- * only within itself, hence the re-sort; and each half was allowed `limit`
- * rows, so the merged column is cut back to the one budget it was asked for.
+ * `gh api graphql` exits non-zero the moment a response carries any `errors`
+ * at all, even when every field the caller actually wanted came back fine —
+ * so the plain `gh()` helper, which keeps only the failure's message, would
+ * throw away a perfectly good answer over one bad owner. This reads the
+ * partial body off the failed call instead, and only gives up on the request
+ * when GitHub sent no body back at all (an auth or network failure, not a
+ * GraphQL one).
  */
-function mergeItems(items: readonly BoardItem[], limit: number): BoardItem[] {
-  const byId = new Map<string, BoardItem>();
-  for (const item of items) {
-    if (!byId.has(item.id)) byId.set(item.id, item);
+async function ghGraphqlRaw(args: readonly string[]): Promise<GraphqlResult> {
+  try {
+    const { stdout } = await execFileAsync("gh", [...args], { maxBuffer: MAX_OUTPUT_BYTES });
+    return toGraphqlResult(JSON.parse(stdout));
+  } catch (error) {
+    const stdout = readErrorStdout(error);
+    if (stdout.trim() === "") throw new Error(describeGhFailure(error));
+    try {
+      return toGraphqlResult(JSON.parse(stdout));
+    } catch {
+      throw new Error(describeGhFailure(error));
+    }
   }
-  return [...byId.values()]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, limit);
+}
+
+/** One relation bucket's results, or omitted entirely when its search failed. */
+interface BucketResult {
+  relation: Relation;
+  nodes: unknown[];
+}
+
+/**
+ * `RELATION_IDS`'s own order, precomputed once instead of an `indexOf` scan
+ * per comparison. The initial value is empty only until the loop below fills
+ * every key `RELATION_IDS` declares; the cast just names that guarantee once.
+ */
+const RELATION_ORDER = RELATION_IDS.reduce(
+  (order, relation, index) => {
+    order[relation] = index;
+    return order;
+  },
+  {} as Record<Relation, number>,
+);
+
+/**
+ * Runs every bucket as one aliased request — the same trick the old
+ * author/owned pair used, generalised past two names. A bucket GitHub refuses
+ * (a mistyped or deleted owner) is warned about and dropped rather than
+ * costing the whole column; the column only fails when every bucket did.
+ */
+async function runBuckets(
+  type: "ISSUE" | "DISCUSSION",
+  selection: string,
+  buckets: readonly RelationBucket[],
+  scope: string,
+  limit: number,
+): Promise<BucketResult[]> {
+  if (buckets.length === 0) return [];
+  const vars = buckets.map((_, index) => `$${aliasName(index)}: String!`).join(", ");
+  const aliases = buckets
+    .map(
+      (_, index) =>
+        `${aliasName(index)}: search(query: $${aliasName(index)}, type: ${type}, first: $limit) { nodes { ${selection} } }`,
+    )
+    .join("\n  ");
+  const query = `query(${vars}, $limit: Int!) {\n  ${aliases}\n}`;
+
+  const args = ["api", "graphql", "-f", `query=${query}`];
+  buckets.forEach((bucket, index) => {
+    args.push("-f", `${aliasName(index)}=${scope} ${bucket.qualifier}`.trim());
+  });
+  args.push("-F", `limit=${limit}`);
+
+  const { data, errors } = await ghGraphqlRaw(args);
+
+  const results: BucketResult[] = [];
+  const failures: string[] = [];
+  buckets.forEach((bucket, index) => {
+    const alias = aliasName(index);
+    const failure = errors.find((error) => Array.isArray(error.path) && error.path[0] === alias);
+    if (failure !== undefined) {
+      console.warn(`github-board: bucket "${bucket.qualifier}" (${bucket.relation}) failed: ${failure.message}`);
+      failures.push(failure.message);
+      return;
+    }
+    results.push({ relation: bucket.relation, nodes: nodesOf(data?.[alias]) });
+  });
+
+  if (results.length === 0 && failures.length > 0) throw new Error(failures.join(" "));
+  return results;
+}
+
+/**
+ * Unions every bucket's nodes by id and keeps every relation that found the
+ * item, deduplicated and sorted to `RELATION_IDS` order. `toBoardItem` returns
+ * null for a node the caller wants dropped entirely (an archived discussion,
+ * an empty node from the other inline fragment matching nothing), which is
+ * why it runs before the relation is ever recorded.
+ */
+function mergeBucketResults<TNode extends GhSearchNode>(
+  buckets: readonly BucketResult[],
+  toBoardItem: (node: TNode) => BoardItem | null,
+  limit: number,
+): BoardItem[] {
+  const byId = new Map<string, BoardItem>();
+  for (const bucket of buckets) {
+    for (const raw of bucket.nodes) {
+      if (typeof raw !== "object" || raw === null) continue;
+      // A generic node shape the caller's own callback narrows further; the
+      // `id` check right below is the only guarantee made about it here.
+      const node = raw as TNode;
+      if (typeof node.id !== "string") continue;
+      const existing = byId.get(node.id);
+      if (existing !== undefined) {
+        if (!existing.relations.includes(bucket.relation)) existing.relations.push(bucket.relation);
+        continue;
+      }
+      const item = toBoardItem(node);
+      if (item === null) continue;
+      item.relations = [bucket.relation];
+      byId.set(node.id, item);
+    }
+  }
+  for (const item of byId.values()) {
+    item.relations.sort((a, b) => RELATION_ORDER[a] - RELATION_ORDER[b]);
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
 }
 
 const ISSUE_SELECTION = `... on Issue {
@@ -411,25 +559,19 @@ const ISSUE_SELECTION = `... on Issue {
 }`;
 
 /**
- * `type: ISSUE` covers issues and pull requests both, so the search itself has
+ * `type: ISSUE` covers issues and pull requests both, so the scope itself has
  * to say `is:issue` — the inline fragment alone would leave every pull request
  * in the response as an empty node.
  */
-const ISSUE_QUERY = dualSearchQuery("ISSUE", ISSUE_SELECTION);
-
-async function fetchIssues(login: string, limit: number): Promise<BoardItem[]> {
+async function fetchIssues(
+  login: string,
+  owners: readonly string[],
+  limit: number,
+): Promise<BoardItem[]> {
   const scope = `is:issue state:open ${UNARCHIVED_ONLY} sort:updated-desc`;
-  const nodes = await dualSearch(
-    ISSUE_QUERY,
-    `${scope} author:${login}`,
-    `${scope} user:${login}`,
-    limit,
-  );
-  const items = nodes
-    .filter((node): node is GhSearchNode => typeof node === "object" && node !== null)
-    .filter((node) => typeof node.id === "string")
-    .map((node) => toItem(node, null));
-  return mergeItems(items, limit);
+  const buckets = [...personalBuckets(login, false), ...ownedBuckets(owners)];
+  const results = await runBuckets("ISSUE", ISSUE_SELECTION, buckets, scope, limit);
+  return mergeBucketResults<GhSearchNode>(results, (node) => toItem(node, null), limit);
 }
 
 /**
@@ -453,8 +595,6 @@ const PULL_REQUEST_SELECTION = `... on PullRequest {
     nodes { id number repository { nameWithOwner } }
   }
 }`;
-
-const PULL_REQUEST_QUERY = dualSearchQuery("ISSUE", PULL_REQUEST_SELECTION);
 
 interface GhPullRequestNode extends GhSearchNode {
   isDraft?: unknown;
@@ -710,29 +850,24 @@ async function attachChecks(items: readonly BoardItem[]): Promise<BoardItem[]> {
  */
 async function fetchPullRequests(
   login: string,
+  owners: readonly string[],
   limit: number,
 ): Promise<{ draft: BoardItem[]; open: BoardItem[] }> {
   const scope = `is:pr state:open ${UNARCHIVED_ONLY} sort:updated-desc`;
-  const nodes = await dualSearch(
-    PULL_REQUEST_QUERY,
-    `${scope} author:${login}`,
-    `${scope} user:${login}`,
+  const buckets = [...personalBuckets(login, true), ...ownedBuckets(owners)];
+  const results = await runBuckets("ISSUE", PULL_REQUEST_SELECTION, buckets, scope, limit);
+
+  const drafts = new Set<string>();
+  const merged = mergeBucketResults<GhPullRequestNode>(
+    results,
+    (row) => {
+      const id = typeof row.id === "string" ? row.id : String(row.url);
+      if (row.isDraft === true) drafts.add(id);
+      return { ...toItem(row, null), linkedIssues: toLinkedIssues(row) };
+    },
     limit,
   );
 
-  const drafts = new Set<string>();
-  const items: BoardItem[] = [];
-  for (const node of nodes) {
-    if (typeof node !== "object" || node === null) continue;
-    const row = node as GhPullRequestNode;
-    // The search returns issues and pull requests under one type; a node that
-    // matched neither inline fragment comes back as an empty object.
-    if (typeof row.id !== "string") continue;
-    if (row.isDraft === true) drafts.add(row.id);
-    items.push({ ...toItem(row, null), linkedIssues: toLinkedIssues(row) });
-  }
-
-  const merged = mergeItems(items, limit);
   // Checks are fetched for the open column alone: a draft says its work is not
   // finished, so its CI is nobody's business yet, and asking for fewer ids
   // keeps the extra request as small as the thing it feeds.
@@ -754,31 +889,34 @@ const DISCUSSION_SELECTION = `... on Discussion {
   repository { nameWithOwner isArchived }
 }`;
 
-const DISCUSSION_QUERY = dualSearchQuery("DISCUSSION", DISCUSSION_SELECTION);
-
 interface GhDiscussionNode extends GhSearchNode {
   category?: { name?: unknown };
 }
 
 /**
  * GitHub's discussion search accepts `author:` and `user:` but ignores
- * `involves:` and `commenter:`, so this column is what the login wrote plus
- * whatever is being discussed on its own repositories — never a thread it only
- * replied to elsewhere.
+ * `mentions:`, `assignee:` and `review-requested:`, so a discussion only ever
+ * carries the `author` or `owned` relation, never one that names a personal
+ * mention or assignment GitHub has no way to search discussions for.
  */
-async function fetchDiscussions(login: string, limit: number): Promise<BoardItem[]> {
-  const nodes = await dualSearch(
-    DISCUSSION_QUERY,
-    `author:${login} sort:updated-desc`,
-    `user:${login} sort:updated-desc`,
+async function fetchDiscussions(
+  login: string,
+  owners: readonly string[],
+  limit: number,
+): Promise<BoardItem[]> {
+  const buckets: RelationBucket[] = [
+    { relation: "author", qualifier: `author:${login}` },
+    ...ownedBuckets(owners),
+  ];
+  const results = await runBuckets("DISCUSSION", DISCUSSION_SELECTION, buckets, "sort:updated-desc", limit);
+  return mergeBucketResults<GhDiscussionNode>(
+    results,
+    (node) =>
+      node.repository?.isArchived === true
+        ? null
+        : toItem(node, typeof node.category?.name === "string" ? node.category.name : null),
     limit,
   );
-  const items = nodes
-    .filter((node): node is GhDiscussionNode => typeof node === "object" && node !== null)
-    .filter((node) => typeof node.id === "string")
-    .filter((node) => node.repository?.isArchived !== true)
-    .map((node) => toItem(node, typeof node.category?.name === "string" ? node.category.name : null));
-  return mergeItems(items, limit);
 }
 
 /**
@@ -791,7 +929,7 @@ async function fetchDiscussions(login: string, limit: number): Promise<BoardItem
  * remounted would otherwise be handed the filter this board was built with.
  */
 interface CachedBoard {
-  /** Login and limit both change the query, so both are part of the key. */
+  /** Login, limit and the watched owners all change the query, so all three are part of the key. */
   key: string;
   columns: BoardColumn[];
   fetchedAt: string;
@@ -852,7 +990,7 @@ async function settle(
 }
 
 export async function loadBoardHandler(
-  { login, limit, force }: z.output<typeof loadBoard.input>,
+  { login, owners, limit, force }: z.output<typeof loadBoard.input>,
   { paseo }: PluginHandlerContext,
 ): Promise<z.input<typeof loadBoard.output>> {
   const requested = login?.trim();
@@ -862,7 +1000,7 @@ export async function loadBoardHandler(
       ? requested
       : (settings.login ?? (await resolveViewerLogin()));
 
-  const key = `${resolved}\u0000${limit}`;
+  const key = `${resolved}\u0000${limit}\u0000${[...owners].sort().join(",")}`;
   if (
     !force &&
     cachedBoard !== null &&
@@ -878,7 +1016,7 @@ export async function loadBoardHandler(
   }
 
   // Both pull request columns share one request, so they settle together.
-  const pullRequests = fetchPullRequests(resolved, limit).then(
+  const pullRequests = fetchPullRequests(resolved, owners, limit).then(
     (split) => ({ split, error: null as string | null }),
     (error: unknown) => ({
       split: { draft: [] as BoardItem[], open: [] as BoardItem[] },
@@ -887,9 +1025,9 @@ export async function loadBoardHandler(
   );
 
   const [issues, prs, discussions] = await Promise.all([
-    settle("issues", "Issues", () => fetchIssues(resolved, limit)),
+    settle("issues", "Issues", () => fetchIssues(resolved, owners, limit)),
     pullRequests,
-    settle("discussions", "Discussions", () => fetchDiscussions(resolved, limit)),
+    settle("discussions", "Discussions", () => fetchDiscussions(resolved, owners, limit)),
   ]);
 
   const columns: BoardColumn[] = [
@@ -946,6 +1084,378 @@ export async function saveLoginHandler({
   const resolved = trimmed === "" || trimmed === "@me" ? await resolveViewerLogin() : trimmed;
   await updateSettings({ login: resolved });
   return { login: resolved };
+}
+
+/** GitHub returns a label as `{ name }`; every list of them needs the same narrowing. */
+function labelNodeNames(nodes: unknown): string[] {
+  if (!Array.isArray(nodes)) return [];
+  const names: string[] = [];
+  for (const raw of nodes) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const label = raw as { name?: unknown };
+    if (typeof label.name === "string") names.push(label.name);
+  }
+  return names;
+}
+
+/**
+ * Projects v2 sits behind its own OAuth scope, which `gh auth login` never
+ * grants automatically, so a token missing it is the ordinary case rather
+ * than a failure. GitHub reports it as a validation error with no `data` at
+ * all, before any field runs — see `ghGraphqlRaw` — so this is checked ahead
+ * of the per-owner partial-failure handling below, not folded into it.
+ */
+const PROJECT_SCOPE_MESSAGE =
+  "GitHub Projects needs a scope this token does not have. Run `gh auth refresh -h github.com -s read:project`, then reload.";
+
+function needsProjectScope(errors: readonly GraphqlError[]): boolean {
+  return errors.some(
+    (error) => error.type === "INSUFFICIENT_SCOPES" || error.message.includes("read:project"),
+  );
+}
+
+/** One project summary node, as `PROJECT_SUMMARY_FIELDS` shapes it. */
+interface GhProjectSummaryNode {
+  id?: unknown;
+  number?: unknown;
+  title?: unknown;
+  url?: unknown;
+  shortDescription?: unknown;
+  closed?: unknown;
+  updatedAt?: unknown;
+  items?: { totalCount?: unknown };
+  owner?: { login?: unknown };
+}
+
+const PROJECT_SUMMARY_FIELDS = `id number title url shortDescription closed updatedAt items { totalCount } owner { ... on User { login } ... on Organization { login } }`;
+
+function toProjectSummary(node: GhProjectSummaryNode): ProjectSummary | null {
+  if (typeof node.id !== "string" || typeof node.url !== "string") return null;
+  return {
+    id: node.id,
+    number: typeof node.number === "number" ? node.number : 0,
+    title: typeof node.title === "string" ? node.title : "",
+    url: node.url,
+    shortDescription: typeof node.shortDescription === "string" ? node.shortDescription : null,
+    owner: typeof node.owner?.login === "string" ? node.owner.login : "",
+    closed: node.closed === true,
+    updatedAt: typeof node.updatedAt === "string" ? node.updatedAt : "",
+    itemCount: typeof node.items?.totalCount === "number" ? node.items.totalCount : 0,
+  };
+}
+
+/** Every project node under one `user`/`organization` alias's `projectsV2` connection. */
+interface GhOwnerProjectsNode {
+  projectsV2?: { nodes?: unknown } | null;
+}
+
+interface CachedProjects {
+  /** The login and the watched owners both change the result, so both are part of the key. */
+  key: string;
+  result: z.input<typeof listProjects.output>;
+  storedAt: number;
+}
+
+const PROJECTS_TTL_MS = 5 * 60_000;
+
+let cachedProjects: CachedProjects | null = null;
+
+export async function listProjectsHandler({
+  login,
+  owners,
+  force,
+}: z.output<typeof listProjects.input>): Promise<z.input<typeof listProjects.output>> {
+  const requested = login?.trim();
+  const settings = await readSettings();
+  const resolved =
+    requested !== undefined && requested !== "" && requested !== "@me"
+      ? requested
+      : (settings.login ?? (await resolveViewerLogin()));
+
+  const key = `${resolved}\u0000${[...owners].sort().join(",")}`;
+  const cached = cachedProjects;
+  if (!force && cached !== null && cached.key === key && Date.now() - cached.storedAt < PROJECTS_TTL_MS) {
+    return cached.result;
+  }
+
+  const orderBy = "orderBy: { field: UPDATED_AT, direction: DESC }";
+  const ownerAliases = owners
+    .map(
+      (_, index) =>
+        `${aliasName(index)}: organization(login: $${aliasName(index)}) { projectsV2(first: 20, ${orderBy}) { nodes { ${PROJECT_SUMMARY_FIELDS} } } }`,
+    )
+    .join("\n  ");
+  const vars = ["$self: String!", ...owners.map((_, index) => `$${aliasName(index)}: String!`)].join(", ");
+  const query = `query(${vars}) {
+  self: user(login: $self) { projectsV2(first: 20, ${orderBy}) { nodes { ${PROJECT_SUMMARY_FIELDS} } } }
+  ${ownerAliases}
+}`;
+
+  const args = ["api", "graphql", "-f", `query=${query}`, "-f", `self=${resolved}`];
+  owners.forEach((owner, index) => args.push("-f", `${aliasName(index)}=${owner}`));
+
+  const { data, errors } = await ghGraphqlRaw(args);
+
+  if (data === null) {
+    return needsProjectScope(errors)
+      ? { projects: [], error: PROJECT_SCOPE_MESSAGE, needsScope: true }
+      : {
+          projects: [],
+          error: errors.map((error) => error.message).join(" ") || "GitHub returned no data.",
+          needsScope: false,
+        };
+  }
+
+  const byId = new Map<string, ProjectSummary>();
+  const collect = (alias: string, label: string): void => {
+    const failure = errors.find((error) => Array.isArray(error.path) && error.path[0] === alias);
+    if (failure !== undefined) {
+      console.warn(`github-board: projects for "${label}" failed: ${failure.message}`);
+      return;
+    }
+    const ownerNode = data[alias] as GhOwnerProjectsNode | null;
+    for (const raw of nodesOf(ownerNode?.projectsV2)) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const summary = toProjectSummary(raw as GhProjectSummaryNode);
+      if (summary !== null) byId.set(summary.id, summary);
+    }
+  };
+
+  collect("self", resolved);
+  owners.forEach((owner, index) => collect(aliasName(index), owner));
+
+  const projects = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const result = { projects, error: null, needsScope: false };
+  cachedProjects = { key, result, storedAt: Date.now() };
+  return result;
+}
+
+/** The Status field's own single-select name, read by `fieldValueByName` and `field`. */
+const STATUS_FIELD_NAME = "Status";
+
+/** The union `content` resolves to; `__typename` is what tells the three apart. */
+interface GhProjectContentNode {
+  __typename?: unknown;
+  id?: unknown;
+  number?: unknown;
+  title?: unknown;
+  url?: unknown;
+  state?: unknown;
+  isDraft?: unknown;
+  repository?: { nameWithOwner?: unknown };
+  author?: { login?: unknown };
+  labels?: { nodes?: unknown };
+  updatedAt?: unknown;
+}
+
+interface GhProjectItemNode {
+  fieldValueByName?: { name?: unknown } | null;
+  content?: GhProjectContentNode | null;
+}
+
+interface GhProjectV2Node {
+  title?: unknown;
+  url?: unknown;
+  field?: { options?: unknown } | null;
+  items?: { nodes?: unknown };
+}
+
+const PROJECT_QUERY = `fragment ProjectFields on ProjectV2 {
+  title
+  url
+  field(name: "${STATUS_FIELD_NAME}") {
+    ... on ProjectV2SingleSelectField {
+      options { name }
+    }
+  }
+  items(first: 100) {
+    nodes {
+      fieldValueByName(name: "${STATUS_FIELD_NAME}") {
+        ... on ProjectV2ItemFieldSingleSelectValue { name }
+      }
+      content {
+        __typename
+        ... on Issue {
+          id
+          number
+          title
+          url
+          state
+          repository { nameWithOwner }
+          author { login }
+          labels(first: 20) { nodes { name } }
+          updatedAt
+        }
+        ... on PullRequest {
+          id
+          number
+          title
+          url
+          state
+          isDraft
+          repository { nameWithOwner }
+          author { login }
+          labels(first: 20) { nodes { name } }
+          updatedAt
+        }
+        ... on DraftIssue {
+          id
+          title
+          updatedAt
+        }
+      }
+    }
+  }
+}
+
+query($owner: String!, $number: Int!) {
+  asUser: user(login: $owner) { projectV2(number: $number) { ...ProjectFields } }
+  asOrg: organization(login: $owner) { projectV2(number: $number) { ...ProjectFields } }
+}`;
+
+/** The Status field's option order, when GitHub could resolve it at all. */
+function statusOptionNamesOf(field: GhProjectV2Node["field"]): string[] {
+  const options = field?.options;
+  if (!Array.isArray(options)) return [];
+  const names: string[] = [];
+  for (const raw of options) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const option = raw as { name?: unknown };
+    if (typeof option.name === "string") names.push(option.name);
+  }
+  return names;
+}
+
+/** Pull requests carry `isDraft`; a draft note has no open/closed state at all. */
+function projectItemStateOf(
+  kind: ProjectItem["kind"],
+  node: GhProjectContentNode,
+): ProjectItem["state"] {
+  if (kind === "draft") return null;
+  if (kind === "pull-request" && node.isDraft === true) return "draft";
+  if (node.state === "OPEN") return "open";
+  if (node.state === "MERGED") return "merged";
+  if (node.state === "CLOSED") return "closed";
+  return null;
+}
+
+function toProjectItem(node: GhProjectContentNode): ProjectItem | null {
+  const kind: ProjectItem["kind"] | null =
+    node.__typename === "Issue"
+      ? "issue"
+      : node.__typename === "PullRequest"
+        ? "pull-request"
+        : node.__typename === "DraftIssue"
+          ? "draft"
+          : null;
+  if (kind === null) return null;
+
+  return {
+    id: typeof node.id === "string" ? node.id : "",
+    kind,
+    title: typeof node.title === "string" ? node.title : "",
+    url: kind !== "draft" && typeof node.url === "string" ? node.url : null,
+    repository:
+      kind !== "draft" && typeof node.repository?.nameWithOwner === "string"
+        ? node.repository.nameWithOwner
+        : null,
+    number: kind !== "draft" && typeof node.number === "number" ? node.number : null,
+    state: projectItemStateOf(kind, node),
+    author: typeof node.author?.login === "string" ? node.author.login : null,
+    labels: labelNodeNames(node.labels?.nodes),
+    updatedAt: typeof node.updatedAt === "string" ? node.updatedAt : "",
+  };
+}
+
+/**
+ * Groups a project's items by its Status field, in the field's own option
+ * order when it could be read at all — a project without a Status field, or
+ * one `fieldValueByName` failed to resolve, still groups by whatever name (or
+ * lack of one) each item actually carries; only the *order* falls back to
+ * insertion order, with the no-status group always last regardless.
+ */
+function groupProjectItems(project: GhProjectV2Node): Array<{ name: string; items: ProjectItem[] }> {
+  const order = statusOptionNamesOf(project.field);
+  const groups = new Map<string, ProjectItem[]>();
+  for (const raw of nodesOf(project.items)) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const row = raw as GhProjectItemNode;
+    if (typeof row.content !== "object" || row.content === null) continue;
+    const item = toProjectItem(row.content);
+    if (item === null) continue;
+    const statusName = typeof row.fieldValueByName?.name === "string" ? row.fieldValueByName.name : "";
+    const bucket = groups.get(statusName);
+    if (bucket === undefined) groups.set(statusName, [item]);
+    else bucket.push(item);
+  }
+
+  const names = [...groups.keys()].sort((a, b) => {
+    if (a === "") return 1;
+    if (b === "") return -1;
+    const orderA = order.indexOf(a);
+    const orderB = order.indexOf(b);
+    if (orderA === -1 && orderB === -1) return 0;
+    if (orderA === -1) return 1;
+    if (orderB === -1) return -1;
+    return orderA - orderB;
+  });
+
+  return names.map((name) => ({ name, items: groups.get(name) ?? [] }));
+}
+
+interface CachedProject {
+  result: z.input<typeof loadProject.output>;
+  storedAt: number;
+}
+
+const PROJECT_TTL_MS = 5 * 60_000;
+
+const cachedProject = new Map<string, CachedProject>();
+
+export async function loadProjectHandler({
+  owner,
+  number,
+  force,
+}: z.output<typeof loadProject.input>): Promise<z.input<typeof loadProject.output>> {
+  const key = `${owner}\u0000${number}`;
+  const cached = cachedProject.get(key);
+  if (!force && cached !== undefined && Date.now() - cached.storedAt < PROJECT_TTL_MS) {
+    return cached.result;
+  }
+
+  const { data, errors } = await ghGraphqlRaw([
+    "api",
+    "graphql",
+    "-f",
+    `query=${PROJECT_QUERY}`,
+    "-f",
+    `owner=${owner}`,
+    "-F",
+    `number=${number}`,
+  ]);
+
+  if (data === null) {
+    if (needsProjectScope(errors)) throw new Error(PROJECT_SCOPE_MESSAGE);
+    throw new Error(errors.map((error) => error.message).join(" ") || "GitHub returned no data.");
+  }
+
+  const asUser = data.asUser as { projectV2?: GhProjectV2Node | null } | null;
+  const asOrg = data.asOrg as { projectV2?: GhProjectV2Node | null } | null;
+  const project = asUser?.projectV2 ?? asOrg?.projectV2;
+
+  if (project === null || project === undefined) {
+    const message = errors.map((error) => error.message).join(" ");
+    throw new Error(message !== "" ? message : `Project ${owner}/${number} was not found.`);
+  }
+
+  const result = {
+    title: typeof project.title === "string" ? project.title : "",
+    url: typeof project.url === "string" ? project.url : "",
+    columns: groupProjectItems(project),
+  };
+
+  cachedProject.set(key, { result, storedAt: Date.now() });
+  return result;
 }
 
 /**

@@ -49,6 +49,16 @@ export const displaySettings = defineSettings({
      * one window and has to survive a different one — or a different machine.
      */
     detailWidthFraction: z.number().min(0).max(1).nullable().default(null),
+    /**
+     * Which organisations and users the board watches beyond the viewer's own
+     * work. GitHub search has no "everything" scope: a query needs an owner, a
+     * repository, or a relationship to someone, so the board asks for the
+     * owners to sweep and gets the viewer's own buckets for free. Empty means
+     * only the personal buckets, which is what a first run shows.
+     */
+    watchedOwners: z.array(z.string()).default([]),
+    /** The last filter the board was left on, so a remount reopens on it. */
+    relation: z.string().default("all"),
   }),
 });
 
