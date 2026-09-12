@@ -38,6 +38,34 @@ are kept because the code they describe is still here.
   cost is logged, and a sweep is refused with the reset time when the remaining budget falls below
   a floor, instead of failing with GitHub's own error at the worst moment.
 
+### Security
+
+An audit was run against this code before the repository was published; every finding below is
+fixed here rather than shipped.
+
+- **The GitHub token no longer touches the disk.** Memoising `gh auth token` in the persistent
+  cache wrote the credential to `~/.local/state/paseo-github-integration/cache/github-token.json`
+  at mode 0644, where `gh` itself keeps the same token at 0600. It is now held in memory for the
+  life of the process and nowhere else.
+- **Cache files are private.** Everything the daemon caches — the titles, bodies and comment
+  threads of private issues and pull requests, and the absolute path of every project on the
+  machine — was written world-readable. Files are now created 0600 inside a 0700 directory, and a
+  file an older build left at 0644 is hardened on the first write.
+- **The image proxy is pinned to attachments.** The allowlist bound the host but not the path, so
+  a comment author could choose which `github.com` URL the daemon fetched with the user's token
+  attached. `github.com` is now accepted only under `/user-attachments/`, and redirects are
+  followed manually with the host re-checked before the credential travels another hop.
+- **A comment can no longer crash the board.** The Markdown and HTML renderers recursed once per
+  nesting level with no cap, so a body of 65,000 `>` characters — which anyone able to comment on
+  a watched issue could write — overflowed the stack during render, with no error boundary to
+  contain it. Nesting is capped at 20 levels and the remainder renders as plain text. Two regexes
+  that backtracked quadratically on hostile input were rewritten to scan linearly.
+- **Images hosted outside GitHub are no longer loaded automatically.** They reported the reader's
+  IP address and user agent to whatever host the comment author picked, which is the exact reason
+  GitHub proxies them through Camo. They render as a link you choose to open.
+- **The watched-owner list is bounded** and each entry must look like a GitHub login, which also
+  closes the search-qualifier smuggling that an arbitrary string allowed.
+
 ### Internal
 
 - Tests (vitest) over the logic that is pure: search parsing, the orderings, prompt templates, the
