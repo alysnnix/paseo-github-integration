@@ -9,6 +9,15 @@ pin and a line to read before you move.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-09-12
+
+### Changed
+
+- Screenshots moved to `images/`, which is where plugin directories look for them, and the README
+  gained a **Limitations** section: what the plugin needs (`gh` authenticated on the daemon, the
+  `read:project` scope for Projects), what it deliberately does not do (load images hosted outside
+  GitHub, search closed work), and where GitHub's own search caps apply.
+
 ## [1.0.0] — 2026-09-12
 
 First release of this repository, and the first under the id `github-integration`. The versions
