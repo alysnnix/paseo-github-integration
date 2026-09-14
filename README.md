@@ -6,7 +6,7 @@ without leaving the app, and with one click to hand any of them to a coding agen
 
 ![The GitHub surface: the Pull requests / Issues / Discussions / Projects switcher, the relation
 chips with their counts, the owner and repository pickers, the search box, and the list of pull
-requests.](docs/board.png)
+requests.](images/board.png)
 
 ## What it does
 
@@ -35,7 +35,7 @@ Paseo agent with a prompt template of your choosing, in a workspace of your choo
 issue or pull request pinned to the top of the conversation.
 
 ![One pull request open in the detail panel: title, author, branches, checks, the Approve, Merge,
-Send to chat and Open on GitHub actions, and the rendered body.](docs/detail-panel.png)
+Send to chat and Open on GitHub actions, and the rendered body.](images/detail-panel.png)
 
 **Projects.** The Projects v2 boards you and your watched owners own, grouped by their Status
 column. Projects need a scope `gh auth login` does not grant, so a token without it gets the
@@ -74,6 +74,22 @@ inputs.paseo-github.url = "github:alysnnix/paseo-github-integration";
 # };
 ```
 
+## Limitations
+
+- **The `gh` CLI does the talking.** Every query is a `gh api graphql` subprocess on the daemon
+  machine, so `gh` has to be installed and authenticated there. The plugin never handles a token
+  itself and cannot log you in.
+- **Projects needs a scope `gh auth login` does not grant.** Without `read:project` the Projects
+  tab shows the command to run instead of your boards.
+- **The board is a `state:open` search.** Closed issues and merged pull requests leave it; there is
+  no archive view, and nothing here searches history.
+- **GitHub search backs the sweep**, so its rules apply: results are capped per query, and a
+  watched owner with thousands of open items shows the most recently updated slice rather than all
+  of them.
+- **One GitHub account at a time**, the one `gh` is authenticated as. There is no account switcher.
+- **Images hosted outside GitHub are not loaded**, deliberately: they would report your IP address
+  to whoever wrote the comment. They render as a link you can open yourself.
+
 ## Trust
 
 Plugin code is **trusted and unsandboxed**: the server half runs beside the daemon with your files,
@@ -85,9 +101,9 @@ Releases are verifiable: every release tag is signed, the published tarball ship
 `SHA256SUMS`, and the artifact carries GitHub build provenance.
 
 ```bash
-git verify-tag v1.0.0
+git verify-tag v1.0.1
 sha256sum -c SHA256SUMS
-gh attestation verify paseo-github-integration-1.0.0.tar.gz --repo alysnnix/paseo-github-integration
+gh attestation verify paseo-github-integration-1.0.1.tar.gz --repo alysnnix/paseo-github-integration
 ```
 
 ## Development
