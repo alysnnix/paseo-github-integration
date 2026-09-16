@@ -191,6 +191,11 @@ export const ItemRow = memo(function ItemRow({
           <Text style={styles.itemRowTitle} numberOfLines={1}>
             {item.title}
           </Text>
+          {item.prState === "CLOSED" || item.prState === "MERGED" ? (
+            <Text style={styles.itemRowDraftPill}>
+              {item.prState === "MERGED" ? "Merged" : "Closed"}
+            </Text>
+          ) : null}
           {type === "draft-prs" ? <Text style={styles.itemRowDraftPill}>Draft</Text> : null}
         </View>
         <Text style={styles.itemRowMeta} numberOfLines={1}>

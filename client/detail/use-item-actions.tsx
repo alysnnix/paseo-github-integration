@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { SEARCH_KEY } from "../lib/search-pages";
 import { useCallback, useState } from "react";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useRpc } from "@getpaseo/plugin/client";
@@ -30,6 +32,7 @@ export function useItemActions({
   onDetailsChanged: (next: ItemDetails) => void;
   onMerged: (itemId: string) => void;
 }): UseItemActionsResult {
+  const queryClient = useQueryClient();
   const approve = useRpc(approvePullRequest);
   const merge = useRpc(mergePullRequest);
   const toast = useToast();
@@ -40,6 +43,7 @@ export function useItemActions({
     setActing(true);
     approve({ id: item.id, body: "" })
       .then((next) => {
+        void queryClient.resetQueries({ queryKey: [SEARCH_KEY] });
         onDetailsChanged(next);
         toast.show(`Approved ${item.repository} #${item.number}.`, { variant: "success" });
       })
@@ -47,13 +51,14 @@ export function useItemActions({
         toast.error(cause instanceof Error ? cause.message : String(cause));
       })
       .finally(() => setActing(false));
-  }, [approve, item.id, item.number, item.repository, onDetailsChanged, toast]);
+  }, [approve, item.id, item.number, item.repository, onDetailsChanged, toast, queryClient]);
 
   const runMerge = useCallback(
     (method: MergeMethod) => {
       setActing(true);
       merge({ id: item.id, method })
         .then((next) => {
+          void queryClient.resetQueries({ queryKey: [SEARCH_KEY] });
           onDetailsChanged(next);
           setMergeOpen(false);
           onMerged(item.id);
@@ -64,7 +69,7 @@ export function useItemActions({
         })
         .finally(() => setActing(false));
     },
-    [item.id, item.number, item.repository, merge, onDetailsChanged, onMerged, toast],
+    [item.id, item.number, item.repository, merge, onDetailsChanged, onMerged, toast, queryClient],
   );
 
   return { acting, mergeOpen, setMergeOpen, runApprove, runMerge };

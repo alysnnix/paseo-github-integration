@@ -23,7 +23,9 @@ export function BoardHeader({
   busy,
   refresh,
   setOpenFilter,
+  showBoardStatus = true,
 }: {
+  showBoardStatus?: boolean;
   surfaceProps: PluginSurfaceProps;
   styles: Styles;
   showSettings: boolean;
@@ -52,7 +54,7 @@ export function BoardHeader({
         </Pressable>
       ) : (
         <>
-          {board !== null ? (
+          {showBoardStatus && board !== null ? (
             <Text style={styles.headerAge} numberOfLines={1}>
               Updated {relativeTime(board.fetchedAt)}
             </Text>
@@ -71,7 +73,7 @@ export function BoardHeader({
           {/* Compact refreshes by pulling the list down, so the button would
               be a second way to do the same thing in the row with the least
               room for one. */}
-          {surfaceProps.layout.compact ? null : (
+          {surfaceProps.layout.compact || !showBoardStatus ? null : (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={busy ? "Loading the board" : "Refresh the board"}

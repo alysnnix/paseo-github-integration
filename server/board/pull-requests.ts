@@ -11,7 +11,7 @@ import { UNARCHIVED_ONLY } from "./types";
  * in the body and issues attached by hand from the Development panel. The board
  * needs it to fold an issue into the pull request that closes it.
  */
-const PULL_REQUEST_SELECTION = `... on PullRequest {
+export const PULL_REQUEST_SELECTION = `... on PullRequest {
   id
   number
   title
@@ -19,6 +19,7 @@ const PULL_REQUEST_SELECTION = `... on PullRequest {
   updatedAt
   createdAt
   isDraft
+  state
   author { login }
   comments { totalCount }
   labels(first: 20) { nodes { name } }
@@ -31,13 +32,14 @@ const PULL_REQUEST_SELECTION = `... on PullRequest {
   }
 }`;
 
-interface GhPullRequestNode extends GhSearchNode {
+export interface GhPullRequestNode extends GhSearchNode {
   isDraft?: unknown;
+  state?: unknown;
   closingIssuesReferences?: { nodes?: unknown };
   commits?: { nodes?: unknown };
 }
 
-function toLinkedIssues(node: GhPullRequestNode): LinkedIssue[] {
+export function toLinkedIssues(node: GhPullRequestNode): LinkedIssue[] {
   const nodes = node.closingIssuesReferences?.nodes;
   if (!Array.isArray(nodes)) return [];
   return nodes
@@ -59,7 +61,7 @@ function toLinkedIssues(node: GhPullRequestNode): LinkedIssue[] {
  * on every pull request. Null when GitHub reports no commit at all, which
  * happens on a pull request whose branch was force-pushed away underneath it.
  */
-function toLastCommitAt(node: GhPullRequestNode): string | null {
+export function toLastCommitAt(node: GhPullRequestNode): string | null {
   const nodes = node.commits?.nodes;
   if (!Array.isArray(nodes) || nodes.length === 0) return null;
   const commit = (nodes[0] as { commit?: { committedDate?: unknown } } | undefined)?.commit;

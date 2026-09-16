@@ -1,3 +1,5 @@
+import { savedViewsSettings, searchPullRequests } from "./shared/saved-views";
+import { searchPullRequestsHandler } from "./server/search/handler";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 
 import { loadBoardHandler } from "./server/board/handler";
@@ -35,6 +37,8 @@ import { displaySettings, promptSettings } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {
   server.handle(loadBoard, loadBoardHandler);
+  server.handle(searchPullRequests, searchPullRequestsHandler);
+  server.registerSettings(savedViewsSettings);
   server.handle(listProjects, listProjectsHandler);
   server.handle(loadProject, loadProjectHandler);
   server.handle(loadItem, loadItemHandler);

@@ -25,6 +25,27 @@ afterEach(async () => {
 });
 
 describe("Cache.get", () => {
+  it("clears every search and does not reuse or store an in-flight pre-mutation answer", async () => {
+    const cache = new Cache<number>("clear-generation");
+    await cache.set("other-query", 5);
+    let finish: (value: number) => void = () => {};
+    let started: () => void = () => {};
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const stale = cache.get("query", 10_000, () => {
+      started();
+      return new Promise<number>((resolve) => { finish = resolve; });
+    });
+    await ready;
+    await cache.clear();
+    expect(await cache.get("query", 10_000, async () => 2)).toBe(2);
+    finish(1);
+    await stale;
+    expect(await cache.get("query", 10_000, async () => 3)).toBe(2);
+    expect(await cache.get("other-query", 10_000, async () => 6)).toBe(6);
+    const reloaded = new Cache<number>("clear-generation");
+    expect(await reloaded.get("query", 10_000, async () => 4)).toBe(2);
+  });
+
   it("answers from memory within the TTL without calling the loader again", async () => {
     const cache = new Cache<number>("ttl-hit");
     const load = vi.fn().mockResolvedValue(1);

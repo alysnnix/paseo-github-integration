@@ -58,6 +58,8 @@ export const RelationSchema = z.enum(RELATION_IDS);
 export type Relation = z.output<typeof RelationSchema>;
 
 export const BoardItemSchema = z.object({
+  /** Saved searches can include closed and merged pull requests. */
+  prState: z.enum(["OPEN", "CLOSED", "MERGED"]).optional(),
   id: z.string(),
   number: z.number().int(),
   title: z.string(),
@@ -88,8 +90,7 @@ export const BoardItemSchema = z.object({
   /** The owner half of `repository`, for the owner filter. */
   owner: z.string(),
   /**
-   * Every relationship the viewer has to this item, deduplicated. Empty is
-   * impossible: an item is on the board because some search matched it.
+   * Every relationship the viewer has to this item, deduplicated. Empty for a saved search hit without a known personal relationship.
    */
   relations: z.array(RelationSchema),
   /**

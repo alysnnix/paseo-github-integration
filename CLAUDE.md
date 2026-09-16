@@ -565,3 +565,9 @@ what let a *cold* client — a fresh reload, a different device, a daemon restar
 calls too. `force` on `board.load` is still the Refresh button asking both layers to bypass
 themselves at once. Whatever should outlive an unmount and is not shaped like a cache belongs in one
 of the two settings stores instead — that is the only other thing here that survives one.
+
+## Saved pull request searches
+
+`shared/saved-views.ts` defines a separate host settings document and the `search.pull-requests` RPC. `client/search/` owns the view editor, selection, and paginated query state. `server/search/` runs an independent `ISSUE_ADVANCED` search and reuses PR mapping/checks from `server/board/`; do not pass its results through the relationship bucket merge or local board filters, since both alter query semantics and ordering. Search hits can have an empty `relations` array.
+
+`shared/search-query.ts` scopes the whole Boolean expression to PRs and resolves unquoted relative date qualifiers. The raw query is persisted; the effective UTC date travels with subsequent page cursors. `client/lib/search-pages.ts` deduplicates overlapping pages without sorting. Search cache keys include authenticated identity, resolved query, and cursor. Label/review/merge handlers clear the search cache, and their client action hooks reset loaded search pages. `Cache.clear()` also prevents an in-flight pre-mutation answer from repopulating the cache.

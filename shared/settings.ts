@@ -42,6 +42,7 @@ export const displaySettings = defineSettings({
   version: 1,
   schema: z.object({
     /** The repository filter, stored as the repositories to hide. */
+    mode: z.string().default("pull-requests"),
     hiddenRepositories: z.array(z.string()).default([]),
     /**
      * The detail panel's width as a share of the board's body, or null for the

@@ -64,13 +64,17 @@ export function describeRow({
   const stampDate = stampMissing ? item.updatedAt : stamp;
 
   const iconName =
-    type === "draft-prs"
-      ? "GitPullRequestDraft"
-      : type === "open-prs"
-        ? "GitPullRequest"
-        : type === "discussions"
-          ? "MessageSquare"
-          : "CircleDot";
+    item.prState === "MERGED"
+      ? "GitMerge"
+      : item.prState === "CLOSED"
+        ? "GitPullRequestClosed"
+        : type === "draft-prs"
+          ? "GitPullRequestDraft"
+          : type === "open-prs"
+            ? "GitPullRequest"
+            : type === "discussions"
+              ? "MessageSquare"
+              : "CircleDot";
   const iconColor = type === "draft-prs" || type === "discussions" ? mutedColor : accentColor;
 
   const byline = item.author !== null && item.author !== viewerLogin ? item.author : null;
@@ -85,5 +89,13 @@ export function describeRow({
     accessibilityHint = isWeb ? "Right-click to edit labels." : "Press and hold to edit labels.";
   }
 
-  return { stampLabel, stampDate, iconName, iconColor, byline, accessibilityLabel, accessibilityHint };
+  return {
+    stampLabel,
+    stampDate,
+    iconName,
+    iconColor,
+    byline,
+    accessibilityLabel,
+    accessibilityHint,
+  };
 }

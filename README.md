@@ -81,8 +81,8 @@ inputs.paseo-github.url = "github:alysnnix/paseo-github-integration";
   itself and cannot log you in.
 - **Projects needs a scope `gh auth login` does not grant.** Without `read:project` the Projects
   tab shows the command to run instead of your boards.
-- **The board is a `state:open` search.** Closed issues and merged pull requests leave it; there is
-  no archive view, and nothing here searches history.
+- **The ordinary board is a `state:open` search.** Closed issues and merged pull requests leave it;
+  saved pull request views can search closed and merged work.
 - **GitHub search backs the sweep**, so its rules apply: results are capped per query, and a
   watched owner with thousands of open items shows the most recently updated slice rather than all
   of them.
@@ -131,3 +131,19 @@ and the other plugins that lived beside it there are not carried here. Thanks to
 starting point and for the MIT licence that made it possible.
 
 Licensed under the MIT licence — see [LICENSE](LICENSE).
+
+## Saved pull request views
+
+Open **Saved views** in the GitHub surface, choose **New view**, and enter a name and a GitHub search query. **Preview** runs the query without saving; **Save** keeps the view on this host for all its connected clients. Views can be renamed, edited, and deleted, and the selected view is remembered across workspace switches.
+
+For example:
+
+```text
+(org:example OR org:sample) is:open draft:false review:required created:>@today-30d sort:updated-desc
+```
+
+Every saved view searches pull requests only. The query controls owner/repository scope, state, draft status, and ordering; the ordinary board's relationship and repository filters do not apply. An item need not have appeared on the ordinary board to appear in a saved view. Closed and merged PRs are supported when the query includes them.
+
+Date qualifiers (`created:`, `updated:`, `closed:`, and `merged:`) accept `@today` and `@today-Nd`. The daemon expands them using the current **UTC calendar date**, preserving comparisons and ranges such as `updated:@today-7d..@today`. Quoted text is left literal. The saved query remains relative; the resolved query is shown above the results and used by **Open search on GitHub**.
+
+**Refresh results** reloads the first page. **Load more** follows GitHub's cursor while keeping the same effective date. Results are cached for five minutes, and local label, review, and merge actions invalidate searches because they can change query membership. GitHub may take time to update its search index after a change. GitHub exposes at most 1,000 matches; narrow the query if you reach that ceiling. Saved views use advanced GraphQL search and show GitHub errors when that search is unavailable or the query is rejected.

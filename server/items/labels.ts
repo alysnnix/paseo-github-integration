@@ -1,3 +1,4 @@
+import { searchCache } from "../search/cache";
 import type { z } from "zod";
 import type { RepositoryLabel, listLabels, toggleLabel } from "../../shared/board";
 import { gh } from "../github/gh";
@@ -124,6 +125,7 @@ export async function toggleLabelHandler({
   const parsed: unknown = JSON.parse(raw);
   const data = (parsed as { data?: Record<string, unknown> }).data;
   const labels = labelNamesOf(add ? data?.addLabelsToLabelable : data?.removeLabelsFromLabelable);
+  await searchCache.clear();
   await patchCachedLabels(itemId, labels);
   return { labels };
 }

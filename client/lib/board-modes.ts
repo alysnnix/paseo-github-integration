@@ -8,6 +8,7 @@ export const BOARD_MODES = [
   { id: "pull-requests", label: "Pull requests" },
   { id: "issues", label: "Issues" },
   { id: "discussions", label: "Discussions" },
+  { id: "saved-views", label: "Saved views" },
   { id: "projects", label: "Projects" },
 ] as const;
 

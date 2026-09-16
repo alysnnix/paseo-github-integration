@@ -9,6 +9,12 @@ pin and a line to read before you move.
 
 ## [Unreleased]
 
+### Added
+
+- Named pull request search views with editable GitHub queries, Boolean operators, UTC relative
+  dates, preview, and pagination. Saved views preserve GitHub ordering and support PRs beyond the
+  viewer's personal relationships, including closed and merged work.
+
 ## [1.0.1] — 2026-09-12
 
 ### Changed

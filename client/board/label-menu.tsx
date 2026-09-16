@@ -1,3 +1,4 @@
+import { SEARCH_KEY } from "../lib/search-pages";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -8,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { useRpc } from "@getpaseo/plugin/client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BoardItem, RepositoryLabel } from "../../shared/board";
 import { listLabels, toggleLabel } from "../../shared/board";
 import type { Styles } from "../theme/use-styles";
@@ -58,6 +59,7 @@ export function LabelMenu({
   const { item } = target;
   const list = useRpc(listLabels);
   const apply = useRpc(toggleLabel);
+  const queryClient = useQueryClient();
 
   /**
    * Each repository's label catalogue, keyed by `owner/name`. A label set
@@ -96,6 +98,7 @@ export function LabelMenu({
       apply({ itemId: item.id, labelId: label.id, add })
         .then((result) => {
           setApplied(new Set(result.labels));
+          void queryClient.resetQueries({ queryKey: [SEARCH_KEY] });
           onChanged(item.id, result.labels);
         })
         .catch((cause: unknown) => {
@@ -109,7 +112,7 @@ export function LabelMenu({
           });
         });
     },
-    [applied, apply, item.id, onChanged, pending],
+    [applied, apply, item.id, onChanged, pending, queryClient],
   );
 
   const shown = useMemo(() => {

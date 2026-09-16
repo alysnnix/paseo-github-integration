@@ -1,7 +1,15 @@
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { Board } from "../../shared/board";
-import type { BoardMode } from "../lib/board-modes";
+import { BOARD_MODES, type BoardMode } from "../lib/board-modes";
 import { isRelation, RELATION_FILTERS } from "../lib/relations";
 import { matchesSearchTerms, parseSearchQuery } from "../lib/search";
 import {
@@ -78,11 +86,16 @@ export function useBoardFilters(
   /** The last ordering picked, hydrated from and persisted to `displaySettings`. */
   const [sortOrder, setSortOrder] = useState<string>("updated");
   const [searchQuery, setSearchQuery] = useState("");
-  /**
-   * Which of the four modes fills the body. Not persisted — the user picks it
-   * fresh every time the surface mounts, the way a browser tab does.
-   */
+  /** The selected mode survives workspace switches along with the filters. */
   const [mode, setMode] = useState<BoardMode>("pull-requests");
+
+  const savedMode = display.status === "ready" ? display.values.mode : null;
+  const modeHydrated = useRef(false);
+  useEffect(() => {
+    if (modeHydrated.current || savedMode === null) return;
+    modeHydrated.current = true;
+    setMode(BOARD_MODES.find((entry) => entry.id === savedMode)?.id ?? "pull-requests");
+  }, [savedMode]);
 
   /**
    * The saved filter is adopted once, when the settings read first lands. Later
@@ -203,7 +216,8 @@ export function useBoardFilters(
     }
     if (mode === "discussions") {
       return {
-        rows: discussionsColumn?.items.map((item) => ({ item, type: "discussions" as const })) ?? [],
+        rows:
+          discussionsColumn?.items.map((item) => ({ item, type: "discussions" as const })) ?? [],
         error: discussionsColumn?.error ?? null,
       };
     }
@@ -302,7 +316,15 @@ export function useBoardFilters(
     return [...searchedRows].sort((a, b) => compareBySortDate(activeOrder, a, b));
   }, [searchedRows, activeOrder]);
 
-  const selectColumnMode = useCallback((id: BoardMode) => setMode(id), []);
+  const selectColumnMode = useCallback(
+    (id: BoardMode) => {
+      setMode(id);
+      setOpenFilter(null);
+      if (display.status === "ready")
+        void display.save({ ...display.values, mode: id }, display.revision);
+    },
+    [display],
+  );
 
   /**
    * Applies a selection locally and saves it, so it survives the next unmount.
@@ -316,7 +338,10 @@ export function useBoardFilters(
       void display
         .save({ ...display.values, hiddenRepositories: [...next].sort() }, display.revision)
         .then((saved) => {
-          if (!saved) console.warn(`[github-board] repository filter could not be saved: ${display.saveError ?? ""}`);
+          if (!saved)
+            console.warn(
+              `[github-board] repository filter could not be saved: ${display.saveError ?? ""}`,
+            );
         });
     },
     [display],
@@ -327,7 +352,10 @@ export function useBoardFilters(
       setRelationFilter(next);
       if (display.status !== "ready") return;
       void display.save({ ...display.values, relation: next }, display.revision).then((saved) => {
-        if (!saved) console.warn(`[github-board] relation filter could not be saved: ${display.saveError ?? ""}`);
+        if (!saved)
+          console.warn(
+            `[github-board] relation filter could not be saved: ${display.saveError ?? ""}`,
+          );
       });
     },
     [display],
@@ -338,7 +366,8 @@ export function useBoardFilters(
       setSortOrder(next);
       if (display.status !== "ready") return;
       void display.save({ ...display.values, sort: next }, display.revision).then((saved) => {
-        if (!saved) console.warn(`[github-board] sort order could not be saved: ${display.saveError ?? ""}`);
+        if (!saved)
+          console.warn(`[github-board] sort order could not be saved: ${display.saveError ?? ""}`);
       });
     },
     [display],

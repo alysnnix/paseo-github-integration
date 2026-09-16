@@ -19,7 +19,7 @@ import { boardCache, BOARD_TTL_MS } from "./cache";
  * per-project overrides. That view now calls `paseo.projects.list()` on the
  * client, which is the same list without the detour.
  */
-async function describeRepositoryProjects(
+export async function describeRepositoryProjects(
   paseo: PaseoApi,
   columns: readonly BoardColumn[],
 ): Promise<{ repositoryProjects: Record<string, string> }> {

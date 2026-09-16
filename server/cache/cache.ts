@@ -31,6 +31,7 @@ export class Cache<T> {
   private readonly file: string;
   private hydrated: Promise<void> | null = null;
   private hardenedFile = false;
+  private generation = 0;
 
   constructor(name: string) {
     this.file = join(cacheDataDir(), `${name}.json`);
@@ -121,20 +122,30 @@ export class Cache<T> {
     const running = this.inFlight.get(key);
     if (running !== undefined) return running;
 
+    const generation = this.generation;
     const promise = (async () => {
       try {
         const value = await load();
-        if (options?.shouldCache?.(value) !== false) {
+        if (generation === this.generation && options?.shouldCache?.(value) !== false) {
           this.memory.set(key, { value, storedAt: Date.now() });
           await this.persist();
         }
         return value;
       } finally {
-        this.inFlight.delete(key);
+        if (generation === this.generation) this.inFlight.delete(key);
       }
     })();
     this.inFlight.set(key, promise);
     return promise;
+  }
+
+  /** In-flight answers from before a mutation must not repopulate the cache. */
+  async clear(): Promise<void> {
+    await this.hydrate();
+    this.generation++;
+    this.memory.clear();
+    this.inFlight.clear();
+    await this.persist();
   }
 
   /** Stores a value the caller already has — a mutation's own response — bypassing `load`. */
