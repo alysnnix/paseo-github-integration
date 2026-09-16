@@ -134,7 +134,7 @@ Licensed under the MIT licence — see [LICENSE](LICENSE).
 
 ## Pull request review status
 
-The list's leading icon shows a green check for approval, an orange diff for requested changes,
+In the main board, saved views, and Projects, the leading PR icon is green for approval and orange for requested changes,
 a red closed-PR icon for closed work, or a purple merge icon for merged work. Drafts remain neutral.
 Merged and closed states take precedence over reviews. Status is also included in the row's
 accessibility label; no extra review badges or text are added to the list.

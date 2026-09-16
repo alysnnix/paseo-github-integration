@@ -28,14 +28,14 @@ const colors = {
   neutral: "gray",
 };
 
-it("uses distinct accessible icons and colors without adding list text", () => {
+it("keeps PR icons with accessible review colors without adding list text", () => {
   expect(prStatusIcon({ ...item, prReview: "approved" }, "open-prs", colors)).toEqual({
-    iconName: "Check",
+    iconName: "GitPullRequest",
     iconColor: "green",
     label: "Approved",
   });
   expect(prStatusIcon({ ...item, prReview: "changes-requested" }, "open-prs", colors)).toEqual({
-    iconName: "FileDiff",
+    iconName: "GitPullRequest",
     iconColor: "orange",
     label: "Changes requested",
   });

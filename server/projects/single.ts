@@ -1,3 +1,4 @@
+import { reviewStatus } from "../../shared/pr-review";
 import type { z } from "zod";
 import type { ProjectItem, loadProject } from "../../shared/board";
 import { ghGraphqlRaw, nodesOf } from "../github/graphql";
@@ -17,6 +18,8 @@ interface GhProjectContentNode {
   url?: unknown;
   state?: unknown;
   isDraft?: unknown;
+  reviewDecision?: unknown;
+  latestOpinionatedReviews?: unknown;
   repository?: { nameWithOwner?: unknown };
   author?: { login?: unknown };
   labels?: { nodes?: unknown };
@@ -68,6 +71,11 @@ const PROJECT_QUERY = `fragment ProjectFields on ProjectV2 {
           url
           state
           isDraft
+          reviewDecision
+          latestOpinionatedReviews(first: 100) {
+            nodes { state }
+            pageInfo { hasNextPage endCursor }
+          }
           repository { nameWithOwner }
           author { login }
           labels(first: 20) { nodes { name } }
@@ -107,14 +115,14 @@ function projectItemStateOf(
   node: GhProjectContentNode,
 ): ProjectItem["state"] {
   if (kind === "draft") return null;
-  if (kind === "pull-request" && node.isDraft === true) return "draft";
-  if (node.state === "OPEN") return "open";
   if (node.state === "MERGED") return "merged";
   if (node.state === "CLOSED") return "closed";
+  if (kind === "pull-request" && node.isDraft === true) return "draft";
+  if (node.state === "OPEN") return "open";
   return null;
 }
 
-function toProjectItem(node: GhProjectContentNode): ProjectItem | null {
+export function toProjectItem(node: GhProjectContentNode): ProjectItem | null {
   const kind: ProjectItem["kind"] | null =
     node.__typename === "Issue"
       ? "issue"
@@ -136,6 +144,10 @@ function toProjectItem(node: GhProjectContentNode): ProjectItem | null {
         : null,
     number: kind !== "draft" && typeof node.number === "number" ? node.number : null,
     state: projectItemStateOf(kind, node),
+    prReview:
+      kind === "pull-request"
+        ? reviewStatus(node.reviewDecision, node.latestOpinionatedReviews)
+        : null,
     author: typeof node.author?.login === "string" ? node.author.login : null,
     labels: labelNodeNames(node.labels?.nodes),
     updatedAt: typeof node.updatedAt === "string" ? node.updatedAt : "",
@@ -149,7 +161,9 @@ function toProjectItem(node: GhProjectContentNode): ProjectItem | null {
  * lack of one) each item actually carries; only the *order* falls back to
  * insertion order, with the no-status group always last regardless.
  */
-function groupProjectItems(project: GhProjectV2Node): Array<{ name: string; items: ProjectItem[] }> {
+function groupProjectItems(
+  project: GhProjectV2Node,
+): Array<{ name: string; items: ProjectItem[] }> {
   const order = statusOptionNamesOf(project.field);
   const groups = new Map<string, ProjectItem[]>();
   for (const raw of nodesOf(project.items)) {
@@ -158,7 +172,8 @@ function groupProjectItems(project: GhProjectV2Node): Array<{ name: string; item
     if (typeof row.content !== "object" || row.content === null) continue;
     const item = toProjectItem(row.content);
     if (item === null) continue;
-    const statusName = typeof row.fieldValueByName?.name === "string" ? row.fieldValueByName.name : "";
+    const statusName =
+      typeof row.fieldValueByName?.name === "string" ? row.fieldValueByName.name : "";
     const bucket = groups.get(statusName);
     if (bucket === undefined) groups.set(statusName, [item]);
     else bucket.push(item);
@@ -182,7 +197,7 @@ const PROJECT_TTL_MS = 5 * 60_000;
 
 type LoadProjectResult = z.input<typeof loadProject.output>;
 
-const projectCache = new Cache<LoadProjectResult>("project");
+const projectCache = new Cache<LoadProjectResult>("project-reviews-v1");
 
 export async function loadProjectHandler({
   owner,
@@ -207,10 +222,14 @@ export async function loadProjectHandler({
 
       if (data === null) {
         if (needsProjectScope(errors)) throw new Error(PROJECT_SCOPE_MESSAGE);
-        throw new Error(errors.map((error) => error.message).join(" ") || "GitHub returned no data.");
+        throw new Error(
+          errors.map((error) => error.message).join(" ") || "GitHub returned no data.",
+        );
       }
 
-      const asUser = data.asUser as { projectV2?: GhProjectV2Node | null } | null;
+      const asUser = data.asUser as {
+        projectV2?: GhProjectV2Node | null;
+      } | null;
       const asOrg = data.asOrg as { projectV2?: GhProjectV2Node | null } | null;
       const project = asUser?.projectV2 ?? asOrg?.projectV2;
 

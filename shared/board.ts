@@ -202,7 +202,10 @@ export type Board = z.output<typeof BoardSchema>;
  */
 const GITHUB_LOGIN_PATTERN = /^[a-zA-Z\d](?:[a-zA-Z\d]|-(?=[a-zA-Z\d]))*$/;
 
-const GitHubLoginSchema = z.string().max(39).regex(GITHUB_LOGIN_PATTERN, "not a valid GitHub login");
+const GitHubLoginSchema = z
+  .string()
+  .max(39)
+  .regex(GITHUB_LOGIN_PATTERN, "not a valid GitHub login");
 
 /**
  * Bounded the same way `limit` is bounded right beside it: each entry becomes
@@ -294,6 +297,7 @@ export const ProjectItemSchema = z.object({
   repository: z.string().nullable(),
   number: z.number().int().nullable(),
   state: z.enum(["open", "draft", "closed", "merged"]).nullable(),
+  prReview: z.enum(["approved", "changes-requested", "review-required"]).nullable().optional(),
   author: z.string().nullable(),
   labels: z.array(z.string()),
   updatedAt: z.string(),
@@ -704,7 +708,9 @@ export const takeLegacySettings = defineRpc({
     z.object({
       found: z.literal(true),
       hiddenRepositories: z.array(z.string()).nullable(),
-      prompts: PromptSettingsSchema.extend({ byType: PromptSetSchema.partial() }).nullable(),
+      prompts: PromptSettingsSchema.extend({
+        byType: PromptSetSchema.partial(),
+      }).nullable(),
       detailWidthFraction: z.number().min(0).max(1).nullable(),
     }),
   ]),

@@ -8,30 +8,13 @@ import type { ProjectItem } from "../../shared/board";
 import { loadProject } from "../../shared/board";
 import type { ProjectsStyles } from "./projects.styles";
 
-type ThemeColors = PluginSurfaceProps["theme"]["colors"];
+import { projectItemGlyph } from "../lib/project-item-status";
 
 /** What `loadProject` answered with, plus the reference it was asked for. */
 interface ProjectDetail {
   title: string;
   url: string;
   columns: readonly { name: string; items: readonly ProjectItem[] }[];
-}
-
-/**
- * One item's leading glyph and colour, by what it is and where it stands.
- * `merged` borrows the accent colour rather than inventing a purple the theme
- * does not expose: the six status/accent tokens are what a plugin gets.
- */
-function itemGlyph(item: ProjectItem, colors: ThemeColors): { name: string; color: string } {
-  if (item.kind === "draft") return { name: "FileText", color: colors.foregroundMuted };
-  if (item.kind === "pull-request") {
-    if (item.state === "merged") return { name: "GitMerge", color: colors.accent };
-    if (item.state === "closed") return { name: "GitPullRequestClosed", color: colors.statusDanger };
-    if (item.state === "draft") return { name: "GitPullRequestDraft", color: colors.foregroundMuted };
-    return { name: "GitPullRequest", color: colors.statusSuccess };
-  }
-  if (item.state === "closed") return { name: "CircleSlash", color: colors.statusDanger };
-  return { name: "CircleDot", color: colors.statusSuccess };
 }
 
 /**
@@ -70,7 +53,12 @@ export function ProjectBoardView({
     setDetailLoading(true);
     fetchProject({ owner, number, force: false })
       .then((result) => {
-        if (live) setDetail({ title: result.title, url: result.url, columns: result.columns });
+        if (live)
+          setDetail({
+            title: result.title,
+            url: result.url,
+            columns: result.columns,
+          });
       })
       .catch((cause: unknown) => {
         if (live) setDetailError(cause instanceof Error ? cause.message : String(cause));
@@ -96,13 +84,16 @@ export function ProjectBoardView({
 
   const renderProjectItem = useCallback(
     (item: ProjectItem, spaced: boolean) => {
-      const glyph = itemGlyph(item, theme.colors);
+      const glyph = projectItemGlyph(item, theme.colors);
       const rowStyle = spaced ? [styles.itemRow, styles.itemRowSpaced] : styles.itemRow;
       return (
         <Pressable
           key={item.id}
           style={rowStyle}
           accessibilityRole={item.url !== null ? "link" : "text"}
+          accessibilityLabel={[item.title, item.repository, item.number, glyph.label]
+            .filter((value) => value !== null && value !== undefined)
+            .join(", ")}
           disabled={item.url === null}
           onPress={item.url !== null ? () => onOpenUrl(item.url as string) : undefined}
         >
@@ -153,7 +144,9 @@ export function ProjectBoardView({
         <ScrollView contentContainerStyle={styles.boardBody}>
           {visibleColumns.map((column) => (
             <View key={column.name === "" ? "\0no-status" : column.name} style={styles.group}>
-              <Text style={styles.groupTitle}>{column.name === "" ? "No status" : column.name}</Text>
+              <Text style={styles.groupTitle}>
+                {column.name === "" ? "No status" : column.name}
+              </Text>
               {column.items.map((item, index) => renderProjectItem(item, index > 0))}
             </View>
           ))}

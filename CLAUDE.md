@@ -571,6 +571,9 @@ of the two settings stores instead — that is the only other thing here that su
 `shared/pr-review.ts` normalizes GitHub's `reviewDecision`, with `latestOpinionatedReviews` as the
 fallback for repositories without required reviews. A truncated review page must not imply approval.
 `server/board/item.ts` maps this information for every caller, including independent search views.
+Projects fetch the same review fields in `server/projects/single.ts`; `client/lib/project-item-status.ts`
+adapts their state to the shared PR icon renderer. Approval and requested changes keep the PR glyph,
+with color and an accessible label carrying the review state.
 Detail loading paginates current opinions to list all approving reviewers, ignoring dismissed,
 comment-only, pending and superseded approvals. Cache namespaces change when review fields are added.
 
