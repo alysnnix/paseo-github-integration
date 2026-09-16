@@ -9,6 +9,11 @@ pin and a line to read before you move.
 
 ## [Unreleased]
 
+### Added
+
+- PR list icons reflect approvals, requested changes, closed and merged states using GitHub-style
+  colors. Detail metadata names current approving reviewers.
+
 ## [1.0.1] — 2026-09-12
 
 ### Changed

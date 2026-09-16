@@ -565,3 +565,16 @@ what let a *cold* client — a fresh reload, a different device, a daemon restar
 calls too. `force` on `board.load` is still the Refresh button asking both layers to bypass
 themselves at once. Whatever should outlive an unmount and is not shaped like a cache belongs in one
 of the two settings stores instead — that is the only other thing here that survives one.
+
+## Review status in PR lists
+
+`shared/pr-review.ts` normalizes GitHub's `reviewDecision`, with `latestOpinionatedReviews` as the
+fallback for repositories without required reviews. A truncated review page must not imply approval.
+`server/board/item.ts` maps this information for every caller, including independent search views.
+Detail loading paginates current opinions to list all approving reviewers, ignoring dismissed,
+comment-only, pending and superseded approvals. Cache namespaces change when review fields are added.
+
+`client/lib/pr-status.ts` owns terminal/draft/review precedence and accessible status labels.
+`client/theme/pr-colors.ts` uses GitHub's light/dark state hues because Paseo has no merged/purple
+semantic token and arbitrary accent colors must not look like merge status. This intentional color
+exception serves the GitHub status convention; other UI continues to use the host theme.

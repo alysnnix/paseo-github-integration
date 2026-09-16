@@ -131,3 +131,14 @@ and the other plugins that lived beside it there are not carried here. Thanks to
 starting point and for the MIT licence that made it possible.
 
 Licensed under the MIT licence — see [LICENSE](LICENSE).
+
+## Pull request review status
+
+The list's leading icon shows a green check for approval, an orange diff for requested changes,
+a red closed-PR icon for closed work, or a purple merge icon for merged work. Drafts remain neutral.
+Merged and closed states take precedence over reviews. Status is also included in the row's
+accessibility label; no extra review badges or text are added to the list.
+
+The detail metadata lists **Approved by USERNAME** for each current approving reviewer.
+Dismissed or superseded approvals are excluded. GitHub's aggregate review decision takes precedence;
+when a repository has no required reviews, the plugin falls back to current reviewer opinions.

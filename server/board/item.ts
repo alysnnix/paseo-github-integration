@@ -1,3 +1,4 @@
+import { reviewStatus } from "../../shared/pr-review";
 import type { BoardItem } from "../../shared/board";
 import type { GhSearchNode } from "./types";
 
@@ -24,6 +25,8 @@ export function toItem(
     typeof node.repository?.nameWithOwner === "string" ? node.repository.nameWithOwner : "";
   const ownerSeparator = repository.indexOf("/");
   return {
+    ...(node.state === "OPEN" || node.state === "CLOSED" || node.state === "MERGED" ? { prState: node.state } : {}),
+    prReview: reviewStatus(node.reviewDecision, node.latestOpinionatedReviews),
     id: typeof node.id === "string" ? node.id : String(node.url),
     number: typeof node.number === "number" ? node.number : 0,
     title: typeof node.title === "string" ? node.title : "",

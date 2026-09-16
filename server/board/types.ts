@@ -3,6 +3,9 @@ import { RELATION_IDS } from "../../shared/board";
 
 /** The fields every relation-bucket search selection asks for, regardless of item type. */
 export interface GhSearchNode {
+  state?: unknown;
+  reviewDecision?: unknown;
+  latestOpinionatedReviews?: unknown;
   id?: unknown;
   number?: unknown;
   title?: unknown;

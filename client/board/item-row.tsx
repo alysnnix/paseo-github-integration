@@ -156,6 +156,7 @@ export const ItemRow = memo(function ItemRow({
     type,
     accentColor,
     mutedColor,
+    statusColors: styles.prStatusColors,
     closes,
     hasLabelMenu: onLabels !== null,
     isWeb,

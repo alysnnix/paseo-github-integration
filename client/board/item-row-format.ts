@@ -1,3 +1,4 @@
+import { prStatusIcon, type PrStatusColors } from "../lib/pr-status";
 import type { BoardItem, CheckSummary, ColumnId } from "../../shared/board";
 import type { SortOrder } from "../lib/sort";
 
@@ -43,6 +44,7 @@ export function describeRow({
   type,
   accentColor,
   mutedColor,
+  statusColors,
   closes,
   hasLabelMenu,
   isWeb,
@@ -53,6 +55,7 @@ export function describeRow({
   type: ColumnId;
   accentColor: string;
   mutedColor: string;
+  statusColors: PrStatusColors;
   /** The linked issues this row closes, already joined for the label. */
   closes: string;
   hasLabelMenu: boolean;
@@ -63,27 +66,30 @@ export function describeRow({
   const stampLabel = stampMissing ? "updated" : order.rowLabel;
   const stampDate = stampMissing ? item.updatedAt : stamp;
 
-  const iconName =
-    type === "draft-prs"
-      ? "GitPullRequestDraft"
-      : type === "open-prs"
-        ? "GitPullRequest"
-        : type === "discussions"
-          ? "MessageSquare"
-          : "CircleDot";
-  const iconColor = type === "draft-prs" || type === "discussions" ? mutedColor : accentColor;
+  const pr =
+    type === "draft-prs" || type === "open-prs" ? prStatusIcon(item, type, statusColors) : null;
+  const iconName = pr?.iconName ?? (type === "discussions" ? "MessageSquare" : "CircleDot");
+  const iconColor = pr?.iconColor ?? (type === "discussions" ? mutedColor : accentColor);
 
   const byline = item.author !== null && item.author !== viewerLogin ? item.author : null;
 
   const openedBy = byline === null ? "" : `, opened by ${byline}`;
   const linkedTo = closes === "" ? "" : `, closes ${closes}`;
   const checksLabel = item.checks === null ? "" : `, checks ${checksSentence(item.checks)}`;
-  const accessibilityLabel = `${item.repository} #${item.number}: ${item.title}${openedBy}${linkedTo}${checksLabel}`;
+  const accessibilityLabel = `${item.repository} #${item.number}: ${item.title}${pr === null ? "" : `, ${pr.label}`}${openedBy}${linkedTo}${checksLabel}`;
 
   let accessibilityHint: string | undefined;
   if (hasLabelMenu) {
     accessibilityHint = isWeb ? "Right-click to edit labels." : "Press and hold to edit labels.";
   }
 
-  return { stampLabel, stampDate, iconName, iconColor, byline, accessibilityLabel, accessibilityHint };
+  return {
+    stampLabel,
+    stampDate,
+    iconName,
+    iconColor,
+    byline,
+    accessibilityLabel,
+    accessibilityHint,
+  };
 }

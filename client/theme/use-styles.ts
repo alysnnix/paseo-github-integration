@@ -1,3 +1,4 @@
+import { prStatusColors } from "./pr-colors";
 import { useMemo } from "react";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 
@@ -18,6 +19,7 @@ export function useStyles(props: PluginSurfaceProps) {
   return useMemo(() => {
     const tokens = computeThemeTokens(props);
     return {
+      prStatusColors: prStatusColors(props.theme.colors),
       ...buildBoardStyles(props, tokens),
       ...buildLaunchStyles(props, tokens),
       ...buildSettingsStyles(props, tokens),

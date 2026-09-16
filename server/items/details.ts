@@ -1,3 +1,4 @@
+import { approvalLogins, OpinionatedReviewsSchema } from "../../shared/pr-review";
 import type { z } from "zod";
 import type { ItemDetails, MergeMethod, ReviewState, loadItem } from "../../shared/board";
 import { gh } from "../github/gh";
@@ -12,7 +13,7 @@ import { Cache } from "../cache/cache";
  * the inline fragments decide which fields come back. A discussion carries no
  * assignees on GitHub, and only a pull request has branches.
  */
-const ITEM_QUERY = `query($id: ID!) {
+const ITEM_QUERY = `query($id: ID!, $cursor: String) {
   node(id: $id) {
     ... on Issue {
       body state createdAt
@@ -22,6 +23,10 @@ const ITEM_QUERY = `query($id: ID!) {
       body state isDraft createdAt baseRefName headRefName
       viewerDidAuthor mergeable
       viewerLatestReview { state }
+      latestOpinionatedReviews(first: 100, after: $cursor) {
+        nodes { state author { login } }
+        pageInfo { hasNextPage endCursor }
+      }
       assignees(first: 20) { nodes { login } }
       repository {
         viewerPermission
@@ -35,6 +40,7 @@ const ITEM_QUERY = `query($id: ID!) {
 }`;
 
 interface GhItemNode {
+  latestOpinionatedReviews?: unknown;
   body?: unknown;
   state?: unknown;
   isDraft?: unknown;
@@ -139,14 +145,48 @@ function toItemDetails(node: GhItemNode): ItemDetails {
   };
 }
 
-export async function fetchItemDetails(id: string): Promise<ItemDetails> {
-  const raw = await gh(["api", "graphql", "-f", `query=${ITEM_QUERY}`, "-f", `id=${id}`]);
+export async function fetchItemDetails(id: string, execute = gh): Promise<ItemDetails> {
+  const raw = await execute(["api", "graphql", "-f", `query=${ITEM_QUERY}`, "-f", `id=${id}`]);
   const parsed: unknown = JSON.parse(raw);
   const node = (parsed as { data?: { node?: unknown } }).data?.node;
   if (typeof node !== "object" || node === null) {
     throw new Error("GitHub no longer has this item, or the account cannot see it.");
   }
-  return toItemDetails(node as GhItemNode);
+  const details = toItemDetails(node as GhItemNode);
+  if (details.branches === null) return details;
+  let page = OpinionatedReviewsSchema.parse(Reflect.get(node, "latestOpinionatedReviews"));
+  const opinions = [...page.nodes];
+  const cursors = new Set<string>();
+  while (page.pageInfo.hasNextPage) {
+    const cursor = page.pageInfo.endCursor;
+    if (cursor === null || cursors.has(cursor))
+      throw new Error("GitHub returned an invalid review cursor.");
+    cursors.add(cursor);
+    const next: unknown = JSON.parse(
+      await execute([
+        "api",
+        "graphql",
+        "-f",
+        `query=${ITEM_QUERY}`,
+        "-f",
+        `id=${id}`,
+        "-f",
+        `cursor=${cursor}`,
+      ]),
+    );
+    if (typeof next !== "object" || next === null)
+      throw new Error("Invalid GitHub review response.");
+    const data: unknown = Reflect.get(next, "data");
+    const nextNode: unknown =
+      typeof data === "object" && data !== null ? Reflect.get(data, "node") : null;
+    page = OpinionatedReviewsSchema.parse(
+      typeof nextNode === "object" && nextNode !== null
+        ? Reflect.get(nextNode, "latestOpinionatedReviews")
+        : null,
+    );
+    opinions.push(...page.nodes);
+  }
+  return { ...details, approvedBy: approvalLogins(opinions) };
 }
 
 /**
@@ -156,7 +196,7 @@ export async function fetchItemDetails(id: string): Promise<ItemDetails> {
  */
 export const DETAILS_TTL_MS = 5 * 60_000;
 
-export const detailsCache = new Cache<ItemDetails>("item-details");
+export const detailsCache = new Cache<ItemDetails>("item-details-reviews-v1");
 
 export async function loadItemHandler({
   id,

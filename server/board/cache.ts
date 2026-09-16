@@ -14,7 +14,7 @@ export interface CachedBoard {
 }
 
 /** Keyed by login, limit and the watched owners — see `loadBoardHandler`. */
-export const boardCache = new Cache<CachedBoard>("board");
+export const boardCache = new Cache<CachedBoard>("board-reviews-v1");
 
 /**
  * Keeps the cached board honest. Without this a label edited now would be

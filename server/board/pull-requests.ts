@@ -19,6 +19,12 @@ const PULL_REQUEST_SELECTION = `... on PullRequest {
   updatedAt
   createdAt
   isDraft
+  state
+  reviewDecision
+  latestOpinionatedReviews(first: 100) {
+    nodes { state }
+    pageInfo { hasNextPage endCursor }
+  }
   author { login }
   comments { totalCount }
   labels(first: 20) { nodes { name } }
@@ -33,6 +39,9 @@ const PULL_REQUEST_SELECTION = `... on PullRequest {
 
 interface GhPullRequestNode extends GhSearchNode {
   isDraft?: unknown;
+  state?: unknown;
+  reviewDecision?: unknown;
+  latestOpinionatedReviews?: unknown;
   closingIssuesReferences?: { nodes?: unknown };
   commits?: { nodes?: unknown };
 }

@@ -58,6 +58,8 @@ export const RelationSchema = z.enum(RELATION_IDS);
 export type Relation = z.output<typeof RelationSchema>;
 
 export const BoardItemSchema = z.object({
+  prState: z.enum(["OPEN", "CLOSED", "MERGED"]).optional(),
+  prReview: z.enum(["approved", "changes-requested", "review-required"]).nullable().optional(),
   id: z.string(),
   number: z.number().int(),
   title: z.string(),
@@ -554,6 +556,8 @@ export type ReviewState = z.output<typeof ReviewStateSchema>;
  * moment it opens, and this round trip only adds what the search never fetched.
  */
 export const ItemDetailsSchema = z.object({
+  /** Current approvals, excluding dismissed and superseded opinions. */
+  approvedBy: z.array(z.string()).optional(),
   /**
    * `open` for everything the board lists today; the rest cover an item that
    * changed on GitHub after the board was fetched, which the panel is the first

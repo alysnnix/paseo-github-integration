@@ -49,6 +49,11 @@ export function DetailSummary({
         {item.title}
       </Text>
       <Text style={styles.detailMeta}>{meta}</Text>
+      {(details?.approvedBy ?? []).map((login) => (
+        <Text key={login} style={styles.detailMeta}>
+          Approved by {login}
+        </Text>
+      ))}
       {details?.branches ? (
         <Text style={styles.detailMeta}>
           {details.branches.head} → {details.branches.base}
