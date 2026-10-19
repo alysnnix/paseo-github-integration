@@ -6,7 +6,14 @@ import { loadCommentsHandler } from "./server/items/comments";
 import { approveHandler, mergeHandler } from "./server/items/review";
 import { loadItemHandler } from "./server/items/details";
 import { loadImageHandler } from "./server/images/images";
-import { sendOptionsHandler, sendToChatHandler } from "./server/launch/handler";
+import {
+  launchDefaultsHandler,
+  listCheckoutsHandler,
+  saveLaunchDefaultsHandler,
+  sendOptionsHandler,
+  sendToChatHandler,
+} from "./server/launch/handler";
+import { listBranchesHandler } from "./server/launch/branches";
 import { listProjectsHandler } from "./server/projects/list";
 import { loadProjectHandler } from "./server/projects/single";
 import {
@@ -23,8 +30,12 @@ import {
   loadImage,
   loadItem,
   loadProject,
+  launchDefaults,
   legacySettingsTaken,
+  listBranches,
+  listCheckouts,
   mergePullRequest,
+  saveLaunchDefaults,
   saveLogin,
   takeLegacySettings,
   sendOptions,
@@ -45,6 +56,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(legacySettingsTaken, legacySettingsTakenHandler);
   server.handle(sendOptions, sendOptionsHandler);
   server.handle(sendToChat, sendToChatHandler);
+  server.handle(launchDefaults, launchDefaultsHandler);
+  server.handle(saveLaunchDefaults, saveLaunchDefaultsHandler);
+  server.handle(listBranches, listBranchesHandler);
+  server.handle(listCheckouts, listCheckoutsHandler);
   server.handle(listLabels, listLabelsHandler);
   server.handle(toggleLabel, toggleLabelHandler);
   server.handle(approvePullRequest, approveHandler);

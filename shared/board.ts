@@ -326,11 +326,14 @@ export const loadProject = defineRpc({
 });
 
 /**
- * How the workspace is cut: on the project's own checkout, or on a fresh Paseo
- * worktree branched off it. The daemon spells these as the two `source` kinds
- * of `workspace.create`, and only a git project can be worktreed.
+ * How the workspace is cut: on the project's own checkout, on a fresh Paseo
+ * worktree, or on a checkout already on the host — a worktree or branch some
+ * earlier send, another tool or the user made — taken as it stands. The daemon
+ * spells a new worktree as a `worktree` source of `workspace.create` and the
+ * other two as a `directory` one, and only a git project offers anything but
+ * Local.
  */
-export const IsolationSchema = z.enum(["local", "worktree"]);
+export const IsolationSchema = z.enum(["local", "worktree", "existing"]);
 
 export type Isolation = z.output<typeof IsolationSchema>;
 
@@ -353,6 +356,12 @@ export const LaunchDefaultsSchema = z.object({
   /** The model's thinking level, when it has any. */
   thinkingOptionId: z.string().nullable(),
   isolation: IsolationSchema,
+  /**
+   * The Paseo host the last card was sent to, by the app's `serverId`. Null
+   * means the host the board itself belongs to — also the fallback when the
+   * saved one is no longer connected.
+   */
+  hostId: z.string().nullable(),
 });
 
 export type LaunchDefaults = z.output<typeof LaunchDefaultsSchema>;
@@ -392,6 +401,111 @@ export const sendOptions = defineRpc({
 });
 
 /**
+ * Where a new worktree starts: the card's own pull request branch, checked out
+ * by the daemon, or one of the repository's branches — a new branch cut from
+ * it, or, with `checkout`, that branch itself checked out with no new branch on
+ * top. Ignored for a Local or Existing send, which works in a checkout as it
+ * stands.
+ *
+ * `checkout` is optional rather than defaulted so a base remembered before it
+ * existed still parses, and reads as the branch-off it always was.
+ */
+export const BaseChoiceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("pull-request") }),
+  z.object({ kind: z.literal("branch"), name: z.string().min(1), checkout: z.boolean().optional() }),
+]);
+
+export type BaseChoice = z.output<typeof BaseChoiceSchema>;
+
+/** A card's repository, and whether the card is a pull request: what a base is remembered by. */
+const BaseKeySchema = z.object({
+  repository: z.string(),
+  url: z.string(),
+  pullRequest: z.boolean(),
+});
+
+/**
+ * The branches a worktree can start from, read from GitHub with the board's own
+ * `gh` — the same list whichever host the card is sent to — plus the base this
+ * repository was last sent with, for this kind of card.
+ */
+export const listBranches = defineRpc({
+  name: "board.list-branches",
+  input: BaseKeySchema.extend({ number: z.number().int() }),
+  output: z.object({
+    defaultBranch: z.string().nullable(),
+    /** Most recently committed first, capped at 100; the default is always included. */
+    branches: z.array(z.string()),
+    remembered: BaseChoiceSchema.nullable(),
+    /**
+     * A pull request's head branch, so the dialog can find a checkout already
+     * on it. Null for anything else, and for a pull request from a fork, whose
+     * head branch name says nothing about which local branch tracks it.
+     */
+    pullRequestHead: z.string().nullable(),
+  }),
+});
+
+/**
+ * One checkout of a project on a host, as an Existing send can join it: the
+ * main checkout or any worktree of it, with the branch it is on right now.
+ */
+export const CheckoutSchema = z.object({
+  path: z.string(),
+  /** Null for a detached HEAD. */
+  branch: z.string().nullable(),
+  /** True for the project's own checkout, as opposed to a worktree of it. */
+  main: z.boolean(),
+  /**
+   * The Paseo workspace already open on this directory, which the agent then
+   * joins rather than opening a second workspace beside it. Null when Paseo has
+   * none — a worktree another tool made.
+   */
+  workspaceId: z.string().nullable(),
+  workspaceName: z.string().nullable(),
+});
+
+export type Checkout = z.output<typeof CheckoutSchema>;
+
+/**
+ * The checkouts of a card's project on the board's own host: every worktree
+ * `git worktree list` reports, whoever made it, matched to the Paseo workspaces
+ * open on them. Another host is asked from the dialog instead, where only the
+ * checkouts Paseo has a workspace for can be seen.
+ */
+export const listCheckouts = defineRpc({
+  name: "board.list-checkouts",
+  input: z.object({ repository: z.string(), url: z.string() }),
+  output: z.object({ checkouts: z.array(CheckoutSchema) }),
+});
+
+/**
+ * What the last send was configured with, on its own. The dialog reads it
+ * before it knows which host it is sending to — `sendOptions` needs a project
+ * on *this* daemon, which a card sent to another host may not have.
+ */
+export const launchDefaults = defineRpc({
+  name: "board.launch-defaults",
+  input: z.object({}),
+  output: LaunchDefaultsSchema,
+});
+
+/**
+ * Saves the next card's defaults after a send that did not go through
+ * `sendToChat` — one launched on another host straight from the dialog, which
+ * this daemon never saw.
+ */
+export const saveLaunchDefaults = defineRpc({
+  name: "board.save-launch-defaults",
+  input: z.object({
+    launch: LaunchDefaultsSchema,
+    /** Null for a Local or Existing send, which leaves the remembered base alone. */
+    base: BaseKeySchema.extend({ choice: BaseChoiceSchema }).nullable(),
+  }),
+  output: z.object({ ok: z.literal(true) }),
+});
+
+/**
  * Hands one card to a fresh workspace and starts the conversation: the
  * repository is matched to a Paseo project on the daemon, a workspace is
  * created on that project (locally or as a worktree), an agent is created in it
@@ -427,6 +541,19 @@ export const sendToChat = defineRpc({
     model: z.string().min(1),
     modeId: z.string().nullable(),
     thinkingOptionId: z.string().nullable(),
+    /** The host's `serverId`, saved with the defaults; this daemon is always the target. */
+    hostId: z.string().nullable(),
+    /** Whether the card is a pull request, which is what its base is remembered under. */
+    pullRequest: z.boolean(),
+    /** Where the worktree starts; null for a Local or Existing send. */
+    base: BaseChoiceSchema.nullable(),
+    /**
+     * The pull request's head branch, as `listBranches` answered it, so a
+     * pull-request start can see a local branch of that name already there.
+     */
+    pullRequestHead: z.string().nullable(),
+    /** The checkout an Existing send joins; null otherwise. */
+    existing: CheckoutSchema.pick({ path: true, workspaceId: true, workspaceName: true }).nullable(),
   }),
   output: z.object({
     workspaceId: z.string(),

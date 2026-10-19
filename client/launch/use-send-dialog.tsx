@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { usePaseo, useRpc } from "@getpaseo/plugin/client";
+import { useRpc } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { Keyboard } from "react-native";
 
 import type { BoardItem, Isolation, LaunchDefaults } from "../../shared/board";
-import { sendOptions, sendToChat } from "../../shared/board";
+import { launchDefaults, saveLaunchDefaults, sendToChat } from "../../shared/board";
+import type { ChipMenu } from "./isolation-control";
 import type { Choice, ModelChoice, PickerId, ProviderChoice } from "./pickers";
+import { branchModeMenu, remoteStartFor, useBaseBranch } from "./use-base-branch";
+import { sendTarget, useCheckouts } from "./use-checkouts";
+import { type HostApi, launchOnRemoteHost, type SendProject, useLaunchTarget } from "./use-launch-target";
+
+export type { SendProject };
 
 /**
  * One entry of the host's provider snapshot — every provider it knows about,
@@ -14,7 +20,7 @@ import type { Choice, ModelChoice, PickerId, ProviderChoice } from "./pickers";
  * may only import the host-provided modules, which `@getpaseo/protocol` is not.
  */
 export type ProviderEntry = Awaited<
-  ReturnType<ReturnType<typeof usePaseo>["providers"]["snapshot"]>
+  ReturnType<HostApi["providers"]["snapshot"]>
 >["entries"][number];
 
 /** What one agent is launched with, once every field has been checked against the host. */
@@ -26,7 +32,7 @@ export interface Configuration {
 }
 
 /** A configuration as it was *asked for*: any field may be missing or stale. */
-export type DesiredConfiguration = Omit<LaunchDefaults, "isolation">;
+export type DesiredConfiguration = Omit<LaunchDefaults, "isolation" | "hostId">;
 
 export function toChoice(option: {
   id: string;
@@ -103,18 +109,14 @@ export function resolveConfiguration(
   };
 }
 
-export interface SendProject {
-  id: string;
-  name: string;
-  rootPath: string;
-  supportsWorktree: boolean;
-}
-
 export interface LaunchResult {
   workspaceId: string;
   workspaceName: string;
   projectName: string;
   agentId: string;
+  /** The host the agent runs on, so the app can open it there. */
+  serverId: string;
+  hostLabel: string;
 }
 
 /** What `useSendDialogState` exposes to the dialog's own layout. */
@@ -122,6 +124,12 @@ export interface UseSendDialogResult {
   prompt: string;
   setPrompt: (next: string) => void;
   project: SendProject | null;
+  hostLabel: string;
+  host: ChipMenu;
+  base: ChipMenu;
+  /** Null unless a new worktree starts from a branch, which can be cut or taken as is. */
+  branchMode: ChipMenu | null;
+  checkout: ChipMenu;
   error: string | null;
   busy: boolean;
   picker: PickerId | null;
@@ -154,26 +162,30 @@ export interface UseSendDialogResult {
  */
 export function useSendDialogState({
   item,
+  pullRequest,
+  boardHost,
   initialPrompt,
   onCancel,
   onLaunched,
 }: {
   item: BoardItem;
+  pullRequest: boolean;
+  /** The host the board belongs to, as the surface's props name it. */
+  boardHost: { id: string; label: string };
   initialPrompt: string;
   onCancel: () => void;
   onLaunched: (result: LaunchResult) => void;
 }): UseSendDialogResult {
-  const paseo = usePaseo();
-  const loadOptions = useRpc(sendOptions);
+  const loadDefaults = useRpc(launchDefaults);
+  const saveDefaults = useRpc(saveLaunchDefaults);
   const launch = useRpc(sendToChat);
   const toast = useToast();
 
   const [prompt, setPrompt] = useState(initialPrompt);
-  const [project, setProject] = useState<SendProject | null>(null);
   const [defaults, setDefaults] = useState<LaunchDefaults | null>(null);
   const [entries, setEntries] = useState<readonly ProviderEntry[] | null>(null);
   const [configuration, setConfiguration] = useState<Configuration | null>(null);
-  const [isolation, setIsolation] = useState<Isolation>("local");
+  const [chosenIsolation, setIsolation] = useState<Isolation>("local");
   const [picker, setPicker] = useState<PickerId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -224,15 +236,14 @@ export function useSendDialogState({
     [busy, initialPrompt, onCancel, picker, prompt, toast],
   );
 
-  // Which project this card belongs to, and what the last send was set to.
+  // What the last send was set to, including the host it went to.
   useEffect(() => {
     let cancelled = false;
-    loadOptions({ repository: item.repository, url: item.url })
+    loadDefaults({})
       .then((result) => {
         if (cancelled) return;
-        setProject(result.project);
-        setDefaults(result.defaults);
-        setIsolation(result.defaults.isolation);
+        setDefaults(result);
+        setIsolation(result.isolation);
       })
       .catch((cause: unknown) => {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -240,7 +251,34 @@ export function useSendDialogState({
     return () => {
       cancelled = true;
     };
-  }, [item.repository, item.url, loadOptions]);
+  }, [loadDefaults]);
+
+  const target = useLaunchTarget({
+    item,
+    boardHost,
+    savedHostId: defaults === null ? undefined : defaults.hostId,
+  });
+  const { project, api: hostApi } = target;
+  const baseBranch = useBaseBranch({ item, pullRequest });
+  const checkouts = useCheckouts({
+    item,
+    project,
+    api: hostApi,
+    isRemote: target.isRemote,
+    hostId: target.hostId,
+    pullRequestHead: baseBranch.pullRequestHead,
+  });
+  // A worktree preference does not survive into a project with none to offer,
+  // or the dialog would show a choice its own picker cannot.
+  const isolation: Isolation = project?.supportsWorktree === true ? chosenIsolation : "local";
+
+  const sendable = sendTarget({
+    isolation,
+    checkouts,
+    checkoutBranch: baseBranch.checkoutBranch,
+    project,
+    hostLabel: target.hostLabel,
+  });
 
   /**
    * The snapshot is taken against the project's checkout rather than the
@@ -249,9 +287,11 @@ export function useSendDialogState({
    */
   const cwd = project?.rootPath ?? null;
   useEffect(() => {
-    if (cwd === null) return undefined;
+    // A new host offers its own providers, so the old host's list goes first.
+    setEntries(null);
+    if (cwd === null || hostApi === null) return undefined;
     let cancelled = false;
-    paseo.providers
+    hostApi.providers
       .snapshot({ cwd })
       .then((snapshot) => {
         if (!cancelled) setEntries(snapshot.entries);
@@ -262,7 +302,7 @@ export function useSendDialogState({
     // Discovery is lazy on the daemon, so a provider still loading when the
     // snapshot was taken arrives later as an update rather than as a second
     // reply. An update for another directory is not ours to adopt.
-    const unsubscribe = paseo.providers.subscribe((update) => {
+    const unsubscribe = hostApi.providers.subscribe((update) => {
       if (cancelled) return;
       if (update.cwd !== undefined && update.cwd !== cwd) return;
       setEntries(update.entries);
@@ -271,7 +311,7 @@ export function useSendDialogState({
       cancelled = true;
       unsubscribe();
     };
-  }, [cwd, paseo]);
+  }, [cwd, hostApi]);
 
   const providers = useMemo(() => (entries === null ? null : readProviders(entries)), [entries]);
 
@@ -314,7 +354,7 @@ export function useSendDialogState({
   );
 
   const selectIsolation = useCallback((id: string) => {
-    setIsolation(id === "worktree" ? "worktree" : "local");
+    setIsolation(id === "worktree" || id === "existing" ? id : "local");
     setPicker(null);
   }, []);
 
@@ -328,14 +368,47 @@ export function useSendDialogState({
     setPicker(null);
   }, []);
 
+  const selectBase = useCallback(
+    (id: string) => {
+      baseBranch.selectBase(id);
+      setPicker(null);
+    },
+    [baseBranch],
+  );
+
+  const selectBranchMode = useCallback(
+    (id: string) => {
+      baseBranch.selectBranchMode(id);
+      setPicker(null);
+    },
+    [baseBranch],
+  );
+
+  const selectCheckout = useCallback(
+    (path: string) => {
+      checkouts.select(path);
+      setPicker(null);
+    },
+    [checkouts],
+  );
+
+  const selectHost = useCallback(
+    (id: string) => {
+      target.selectHost(id);
+      setError(null);
+      setPicker(null);
+    },
+    [target],
+  );
+
   const send = useCallback(() => {
-    if (configuration === null || busy) return;
+    if (configuration === null || project === null || busy || !sendable.ready) return;
     const text = prompt.trim();
     if (text === "") return;
     setBusy(true);
     setError(null);
     setPicker(null);
-    launch({
+    const input = {
       repository: item.repository,
       number: item.number,
       title: item.title,
@@ -350,8 +423,22 @@ export function useSendDialogState({
       model: configuration.model,
       modeId: configuration.modeId,
       thinkingOptionId: configuration.thinkingOptionId,
-    })
-      .then(onLaunched)
+    };
+    const hostId = target.isRemote ? target.hostId : null;
+    const base = isolation === "worktree" ? baseBranch.base : null;
+    const { existing } = sendable;
+    const sent =
+      !target.isRemote || hostApi === null
+        ? launch({ ...input, hostId, pullRequest, pullRequestHead: baseBranch.pullRequestHead, base, existing })
+        : launchOnRemoteHost(hostApi, project, { ...input, start: remoteStartFor(base), existing }, () =>
+            // The board's daemon never saw this send, so it is told what to open on next.
+            saveDefaults({
+              launch: { ...configuration, isolation, hostId },
+              base: base === null ? null : { repository: item.repository, url: item.url, pullRequest, choice: base },
+            }),
+          );
+    sent
+      .then((result) => onLaunched({ ...result, serverId: target.hostId, hostLabel: target.hostLabel }))
       .catch((cause: unknown) => {
         // Left open on failure, with everything still typed in: the workspace
         // may or may not exist, but the user's prompt certainly should not be
@@ -359,9 +446,13 @@ export function useSendDialogState({
         setBusy(false);
         setError(cause instanceof Error ? cause.message : String(cause));
       });
-  }, [busy, configuration, isolation, item, launch, onLaunched, prompt]);
+  }, [baseBranch.base, baseBranch.pullRequestHead, busy, configuration, hostApi, isolation, item, launch, onLaunched, project, prompt, pullRequest, saveDefaults, sendable, target]);
 
-  const ready = configuration !== null && project !== null && prompt.trim() !== "";
+  const ready =
+    configuration !== null &&
+    project !== null &&
+    prompt.trim() !== "" &&
+    sendable.ready;
   const thinkingOptions = model?.thinkingOptions ?? [];
   const modes = provider?.modes ?? [];
 
@@ -369,7 +460,17 @@ export function useSendDialogState({
     prompt,
     setPrompt,
     project,
-    error,
+    hostLabel: target.hostLabel,
+    host: { choices: target.hosts, selectedId: target.hostId, label: target.hostLabel, onSelect: selectHost },
+    base: { choices: baseBranch.choices, selectedId: baseBranch.baseId, label: baseBranch.label, onSelect: selectBase },
+    branchMode: branchModeMenu(baseBranch.branchMode, selectBranchMode),
+    checkout: {
+      choices: checkouts.choices,
+      selectedId: checkouts.selected?.path ?? null,
+      label: checkouts.label,
+      onSelect: selectCheckout,
+    },
+    error: error ?? target.projectError ?? sendable.error,
     busy,
     picker,
     togglePicker,
