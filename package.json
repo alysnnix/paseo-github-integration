@@ -20,7 +20,7 @@
     "oxlint": "^1.82.0",
     "oxlint-tsgolint": "^7.0.2001",
     "react": "19.1.0",
-    "react-native": "0.81.5",
+    "react-native": "0.88.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0",
     "zod": "^4.5.4"
