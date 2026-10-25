@@ -17,11 +17,9 @@ updates:
           - "*"
     # The app supplies these to a running plugin, so a plugin's own copy is a
     # type-checking stand-in for whatever Paseo ships, not a dependency it can
-    # move on its own. @getpaseo/plugin peer-depends on the exact react the
-    # app bundles, so bumping react (and react-native, which drags react with
-    # it) fails ERESOLVE outright; the others merely let the typechecker
-    # describe APIs the host does not have. They move by hand, when Paseo's
-    # `plugin init` scaffold moves.
+    # move on its own: a newer copy lets the typechecker describe APIs the
+    # host does not have. They move by hand, to the versions in Paseo's
+    # `packages/app/package.json` at the release `paseo-plugin.json` requires.
     ignore:
       - dependency-name: react
       - dependency-name: react-native
