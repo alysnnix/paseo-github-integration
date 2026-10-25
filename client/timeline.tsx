@@ -9,7 +9,7 @@
  * outcome as never having appended one.
  */
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
 

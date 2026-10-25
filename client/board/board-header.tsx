@@ -1,5 +1,5 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 
 import type { Board } from "../../shared/board";

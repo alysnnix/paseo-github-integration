@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { type SettingsState, useRpc, useSettings } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
+import { useToast } from "@getpaseo/plugin/client/ui";
 import type { SettingsDefinition } from "@getpaseo/plugin";
 
 import type { PromptSettings } from "../../shared/board";

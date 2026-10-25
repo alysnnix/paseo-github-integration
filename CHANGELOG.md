@@ -9,6 +9,32 @@ pin and a line to read before you move.
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires Paseo 0.13.0.** The plugin now builds against `@getpaseo/plugin` 0.13.0 and registers
+  through the APIs that replace the ones 0.13.0 deprecates: `addScreen`, `addSidebarHeaderItem` and
+  `openScreen` instead of `addSurface`, `addSidebarItem` and `openSurface`, and
+  `@getpaseo/plugin/client/ui` instead of `@getpaseo/plugin/client/react-native`. Paseo removes the
+  old ones after April 2027. The `react` and `react-native` type stand-ins follow the 0.13.0 app
+  (19.2.3 and 0.86.3). An app or daemon on 0.12 or older refuses to load the plugin.
+
+### Fixed
+
+- **The client loads again on current Paseo** (#11). Lucide dropped its brand icons, so `Github`
+  no longer resolved and the host rejected the whole client registration with `Unknown Lucide
+  icon: Github`. The sidebar row, the settings screen, the command-center entry and the timeline
+  card use `GitPullRequest`. Thanks to @keithpk for the report and the fix.
+
+### Security
+
+- **The 11 open Dependabot advisories are closed.** vite 8.3.5 and vitest 5.0.5 (with
+  `@vitest/mocker`) fix the dev-server file disclosure, `launch-editor` command injection and mock
+  registration advisories; shell-quote 1.12.0 fixes the `quote()` command injection;
+  brace-expansion 1.x and sprintf-js left the tree with react-native 0.86.3. zod moved to 4.6.7 for
+  the oversized-collection memory exhaustion `npm audit` reports. All of these are development or
+  type-checking dependencies: Paseo compiles the plugin and supplies every module it imports at
+  runtime, so no installed copy of the plugin ran them.
+
 ## [1.0.1] — 2026-09-12
 
 ### Changed

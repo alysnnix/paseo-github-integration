@@ -12,13 +12,13 @@
  * gear button with nowhere to go.
  */
 import { type PluginSurfaceProps, useRpc, useSettings } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import {
   SettingsAction,
   SettingsInput,
   type SettingsInputHandle,
   SettingsRow,
   SettingsSection,
+  useToast,
 } from "@getpaseo/plugin/client/ui";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { View } from "react-native";

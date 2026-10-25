@@ -1,4 +1,4 @@
-import { Modal, TextInput as SheetTextInput } from "@getpaseo/plugin/client/react-native";
+import { Modal, TextInput as SheetTextInput } from "@getpaseo/plugin/client/ui";
 import { Pressable, Text } from "react-native";
 
 import type { BoardItem } from "../../shared/board";

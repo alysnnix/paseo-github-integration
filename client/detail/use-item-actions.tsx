@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { useToast } from "@getpaseo/plugin/client/react-native";
+import { useToast } from "@getpaseo/plugin/client/ui";
 import { useRpc } from "@getpaseo/plugin/client";
 
 import type { BoardItem, ItemDetails, MergeMethod } from "../../shared/board";

@@ -1,5 +1,5 @@
 import type React from "react";
-import { ScrollView as SheetScrollView } from "@getpaseo/plugin/client/react-native";
+import { ScrollView as SheetScrollView } from "@getpaseo/plugin/client/ui";
 import { Pressable, Text, View } from "react-native";
 
 import type { Styles } from "../theme/use-styles";
