@@ -469,7 +469,7 @@ row that fails validation still renders as nothing rather than throwing.
 
 Still `props.navigation.openAgent({ agentId })`, run in the client bundle because the server half
 lives beside the daemon, which on a remote host is a different machine from the one the user is
-looking at. The plugin now requires Paseo `>=0.8.0` outright, so the pre-navigation-prop fallback
+looking at. The plugin now requires Paseo `>=0.13.0` outright, so the pre-navigation-prop fallback
 this section used to describe is gone: every client that can run this bundle at all received the
 `navigation` prop with it.
 

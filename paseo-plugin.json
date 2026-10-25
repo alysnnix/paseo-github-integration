@@ -1,4 +1,4 @@
 {
   "id": "github-integration",
-  "requirements": { "paseo": ">=0.8.0" }
+  "requirements": { "paseo": ">=0.13.0" }
 }

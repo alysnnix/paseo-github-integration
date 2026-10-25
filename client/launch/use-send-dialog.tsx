@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePaseo, useRpc } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
+import { useToast } from "@getpaseo/plugin/client/ui";
 import { Keyboard } from "react-native";
 
 import type { BoardItem, Isolation, LaunchDefaults } from "../../shared/board";

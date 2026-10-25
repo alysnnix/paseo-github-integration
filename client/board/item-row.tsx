@@ -1,5 +1,5 @@
 import { memo, useCallback, useState } from "react";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { Pressable, Text, View } from "react-native";
 

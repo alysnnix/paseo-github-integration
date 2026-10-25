@@ -1,4 +1,4 @@
-import { Modal } from "@getpaseo/plugin/client/react-native";
+import { Modal } from "@getpaseo/plugin/client/ui";
 import { Pressable, Text } from "react-native";
 
 import type { BoardItem, MergeMethod } from "../../shared/board";

@@ -43,7 +43,7 @@ command to run and a button to copy it, rather than an error.
 
 ## Install
 
-Requires Paseo **0.8.0 or newer** on the daemon *and* on the app, plus the
+Requires Paseo **0.13.0 or newer** on the daemon *and* on the app, plus the
 [`gh` CLI](https://cli.github.com/) authenticated on the daemon machine — the plugin shells out to
 it and never handles a token itself.
 

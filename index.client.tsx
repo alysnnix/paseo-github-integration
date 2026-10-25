@@ -1,13 +1,14 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 
 import { GitHubBoard } from "./client/board/github-board";
+import { BOARD_SCREEN_ID, BoardSidebarItem } from "./client/board/sidebar-item";
 import { BoardSettingsScreen } from "./client/settings/settings-screen";
 import { BoardTimelineCard } from "./client/timeline";
 import { BoardTimelineItemSchema } from "./shared/board";
 import { BOARD_ITEM_TIMELINE_KIND, BOARD_ITEM_TIMELINE_VERSION } from "./shared/timeline";
 
 export default function contribute(client: PluginClientContext) {
-  client.addSurface("board", GitHubBoard);
+  client.addScreen({ id: BOARD_SCREEN_ID, title: "GitHub", Component: GitHubBoard });
   /**
    * Renders the rows `sendToChatHandler` appends. The `kind`/`version` pair has
    * to match what the daemon wrote, which is why both sides import it from
@@ -23,12 +24,7 @@ export default function contribute(client: PluginClientContext) {
     schema: BoardTimelineItemSchema,
     Component: BoardTimelineCard,
   });
-  client.addSidebarItem({
-    id: "board",
-    title: "GitHub",
-    icon: "GitPullRequest",
-    surface: "board",
-  });
+  client.addSidebarHeaderItem({ id: BOARD_SCREEN_ID, title: "GitHub", Component: BoardSidebarItem });
   client.addSettingsScreen({
     id: "board",
     title: "GitHub board",
@@ -52,7 +48,7 @@ export default function contribute(client: PluginClientContext) {
     keywords: ["github", "issues", "pull requests", "prs", "discussions"],
     context: "global",
     onSelect(context) {
-      context.openSurface("board");
+      context.openScreen({ screenId: BOARD_SCREEN_ID });
     },
   });
 
