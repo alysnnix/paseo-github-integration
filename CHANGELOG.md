@@ -9,6 +9,14 @@ pin and a line to read before you move.
 
 ## [Unreleased]
 
+### Changed
+
+- **The GitHub mark is restored.** The sidebar, settings, command center and timeline cards use
+  an inline Octicons SVG instead of a Lucide icon name, so removing Lucide's brand icons cannot
+  break the plugin. The mark inherits the host's color in light and dark themes.
+- **Requires Paseo 0.13.0-beta.1 or newer.** Inline SVG icons need the 0.13 icon API; the SDK and
+  its client/protocol type dependencies now target 0.13.0.
+
 ## [1.0.1] — 2026-09-12
 
 ### Changed

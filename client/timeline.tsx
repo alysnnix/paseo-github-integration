@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import type { BoardTimelineItem } from "../shared/board";
+import { githubIcon } from "./icons/github";
 import { openExternalUrl } from "./web";
 
 /**
@@ -81,7 +82,7 @@ export function BoardTimelineCard({
       onPress={() => openExternalUrl(url)}
     >
       <View style={styles.header}>
-        <Icon name="GitPullRequest" size={14} color={theme.colors.foregroundMuted} />
+        <Icon icon={githubIcon} size={14} color={theme.colors.foregroundMuted} />
         <Text style={styles.slug} numberOfLines={1}>
           {repository} #{number}
         </Text>
