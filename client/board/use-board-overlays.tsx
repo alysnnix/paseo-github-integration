@@ -228,7 +228,7 @@ export function useBoardOverlays(
    * `navigateToAgent` against the host rendering the surface.
    *
    * The prop is still typed optional because hosts before 0.7.0-beta.3 passed
-   * nothing. This plugin now requires Paseo >=0.8.0, and each app checks that
+   * nothing. This plugin now requires Paseo >=0.13.0-beta.1, and each app checks that
    * against its *own* version before it evaluates this bundle, so every client
    * that can run this code passes it. The `undefined` branch therefore only
    * leaves the notice standing — which already names the workspace the work went

@@ -1,6 +1,7 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 
 import { GitHubBoard } from "./client/board/github-board";
+import { githubIcon } from "./client/icons/github";
 import { BoardSettingsScreen } from "./client/settings/settings-screen";
 import { BoardTimelineCard } from "./client/timeline";
 import { BoardTimelineItemSchema } from "./shared/board";
@@ -26,13 +27,13 @@ export default function contribute(client: PluginClientContext) {
   client.addSidebarItem({
     id: "board",
     title: "GitHub",
-    icon: "GitPullRequest",
+    icon: githubIcon,
     surface: "board",
   });
   client.addSettingsScreen({
     id: "board",
     title: "GitHub board",
-    icon: "GitPullRequest",
+    icon: githubIcon,
     Component: BoardSettingsScreen,
   });
   client.addCommandCenterItem({
@@ -48,7 +49,7 @@ export default function contribute(client: PluginClientContext) {
   client.addCommandCenterItem({
     id: "open-board",
     title: "Open GitHub board",
-    icon: "GitPullRequest",
+    icon: githubIcon,
     keywords: ["github", "issues", "pull requests", "prs", "discussions"],
     context: "global",
     onSelect(context) {
