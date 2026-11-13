@@ -99,6 +99,12 @@ function skipFragments(query: string): number {
  */
 export function injectRateLimit(query: string): string {
   const operationStart = skipFragments(query);
+  // `rateLimit` is a field on the Query root only. Injecting it into a mutation
+  // makes GitHub reject the whole document — "Field 'rateLimit' doesn't exist on
+  // type 'Mutation'" — which failed every approve, merge and label action.
+  if (/^\s*mutation\b/.test(query.slice(operationStart))) {
+    return query;
+  }
   const braceIndex = query.indexOf("{", operationStart);
   if (braceIndex === -1) return query;
   return `${query.slice(0, braceIndex + 1)}\n  rateLimit { cost remaining limit resetAt }${query.slice(braceIndex + 1)}`;
